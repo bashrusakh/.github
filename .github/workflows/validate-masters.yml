@@ -1,0 +1,115 @@
+name: Validate Masters
+
+# Deterministic, no-LLM validation of the reusable central triage masters:
+#  - the capability contract of every master holds (validate-masters.py)
+#  - the master sources validate and compile under gh-aw strict mode
+#  - the committed lock files are in sync with their sources
+# The pinned shared import is resolved from the vendored .github/aw/imports/**
+# snapshot, so no long-lived token is required.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+      - ".github/aw/**"
+      - ".github/workflows/validate-masters.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+      - ".github/aw/**"
+      - ".github/workflows/validate-masters.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-masters-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GH_AW_VERSION: v0.89.21
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate the master capability contract (deterministic, no LLM)
+        run: python3 .github/aw/validate-masters.py
+
+      - name: Run the validator's negative tests (every tamper must fail closed)
+        run: python3 .github/aw/test-validate-masters.py
+
+      - name: Install gh-aw pinned to ${{ env.GH_AW_VERSION }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-aw --pin "$GH_AW_VERSION" --force
+          gh aw --version
+
+      - name: Validate master sources (strict)
+        # Same worktree-path caveat as the compile step below: run the validation from a
+        # checkout whose path has no extra "/.github/" segment so the vendored imports resolve.
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/masters"
+          rm -rf "$root"
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE" "$root"
+          ( cd "$root" && gh aw validate --strict --no-check-update ) | tee /tmp/gh-aw-validate.log
+
+      - name: Compile (strict) and assert lock freshness
+        # NOTE ON THE WORKTREE PATH. gh-aw v0.89.21 resolves the import workspace root by
+        # cutting a workflow path at the FIRST "/.github/" (pkg/workflow/compiler_yaml_prompt.go,
+        # resolveWorkspaceRoot). actions/checkout places this repository at
+        # "$GITHUB_WORKSPACE" == "/home/runner/work/.github", so the first "/.github/" is the
+        # RUNNER WORKSPACE PARENT, not the repository root. Import resolution then misses the
+        # vendored .github/aw/imports/** cache and the compiler silently degrades to
+        # `{{#runtime-import ...}}` macros instead of inlining the shared prompt cores, which
+        # cannot resolve at run time for a cross-repository caller. Compiling from a fresh
+        # checkout whose path has no extra "/.github/" segment keeps the compiler in the
+        # intended layout. This works around a compiler path bug; the committed locks are
+        # produced the same way and remain the authoritative artifacts.
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/masters"
+          rm -rf "$root"
+          # A local clone (not `git archive`) so the compiler sees a real git worktree at a
+          # path without an extra "/.github/" segment.
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE" "$root"
+          ( cd "$root" && gh aw compile --strict --no-check-update ) | tee /tmp/gh-aw-compile.log
+          git checkout -- .gitattributes 2>/dev/null || true
+          status=0
+          for lock in $(git ls-files '.github/workflows/*.lock.yml'); do
+            if ! cmp -s "$GITHUB_WORKSPACE/$lock" "$root/$lock"; then
+              echo "::error::$lock is out of sync with its .md source (or the vendored import cache drifted)."
+              status=1
+            fi
+          done
+          # git diff does not see untracked files: a master without a committed lock, or a
+          # missing vendored import, would otherwise pass this check silently.
+          untracked="$(git ls-files --others --exclude-standard -- '.github/workflows/*.lock.yml' '.github/aw/imports' '.github/aw/actions-lock.json')"
+          if [ -n "$untracked" ]; then
+            echo "::error::Uncommitted generated files under .github/ (missing lock or import cache):"
+            echo "$untracked"
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Run 'gh aw compile --strict --no-check-update' and commit the result."
+            exit 1
+          fi
+          echo "All locks are byte-identical to a fresh strict compile."
+
+      - name: Assert no deprecation or unexpected warnings
+        run: |
+          set -euo pipefail
+          if grep -n -i -E 'deprecat|unknown property|additional propert' /tmp/gh-aw-validate.log /tmp/gh-aw-compile.log; then
+            echo "::error::Deprecated/unknown frontmatter or unexpected safe-output warnings detected."
+            exit 1
+          fi
+          echo "No deprecation/unknown-property warnings."
