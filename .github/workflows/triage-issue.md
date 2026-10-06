@@ -90,12 +90,15 @@ pre-agent-steps:
       sha=$(gh api "repos/$GITHUB_REPO/commits/$POLICY_REF" --jq .sha)
       dir=".policy/$sha"; mkdir -p "$dir"
       for f in $CONTRACT_FILES; do
+        # Create the parent directory first: the redirect target is
+        # "$dir/$f.tmp", so a nested contract path needs the directory to exist
+        # before the shell opens the file.
+        mkdir -p "$dir/$(dirname "$f")"
         if ! gh api "repos/$GITHUB_REPO/contents/$f?ref=$sha" --jq .content 2>/dev/null | base64 -d > "$dir/$f.tmp"; then
           rm -f "$dir/$f.tmp"
           echo "::error::Contract file '$f' is missing in $GITHUB_REPO at $sha (contract_files='$CONTRACT_FILES'). Fix the caller's contract_files input; refusing to run triage with an incomplete contract."
           exit 1
         fi
-        mkdir -p "$dir/$(dirname "$f")"
         mv "$dir/$f.tmp" "$dir/$f"
       done
       echo "POLICY_SHA=$sha" >> "$GITHUB_ENV"
