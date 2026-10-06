@@ -1,0 +1,85 @@
+name: Validate Masters
+
+# Deterministic, no-LLM validation of the reusable central triage masters:
+#  - the capability contract of every master holds (validate-masters.py)
+#  - the master sources validate and compile under gh-aw strict mode
+#  - the committed lock files are in sync with their sources
+# The pinned shared import is resolved from the vendored .github/aw/imports/**
+# snapshot, so no long-lived token is required.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+      - ".github/aw/**"
+      - ".github/workflows/validate-masters.yml"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+      - ".github/aw/**"
+      - ".github/workflows/validate-masters.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-masters-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GH_AW_VERSION: v0.89.21
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate the master capability contract (deterministic, no LLM)
+        run: python3 .github/aw/validate-masters.py
+
+      - name: Install gh-aw pinned to ${{ env.GH_AW_VERSION }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh extension install github/gh-aw --pin "$GH_AW_VERSION" --force
+          gh aw --version
+
+      - name: Validate master sources (strict)
+        run: |
+          set -euo pipefail
+          gh aw validate --strict --no-check-update | tee /tmp/gh-aw-validate.log
+
+      - name: Compile (strict) and assert lock freshness
+        run: |
+          set -euo pipefail
+          gh aw compile --strict --no-check-update | tee /tmp/gh-aw-compile.log
+          # gh-aw auto-appends a .lock.yml entry to the root .gitattributes on every
+          # compile; that generated side effect is not part of the master contract.
+          git checkout -- .gitattributes 2>/dev/null || true
+          if ! git diff --exit-code; then
+            echo "::error::Lock files are out of sync with their .md sources (or the vendored import cache drifted). Run 'gh aw compile --strict --no-check-update' and commit the result."
+            exit 1
+          fi
+          # git diff does not see untracked files: a master without a committed lock, or a
+          # missing vendored import, would otherwise pass this check silently.
+          untracked="$(git ls-files --others --exclude-standard -- '.github/workflows/*.lock.yml' '.github/aw/imports' '.github/aw/actions-lock.json')"
+          if [ -n "$untracked" ]; then
+            echo "::error::Uncommitted generated files under .github/ (missing lock or import cache):"
+            echo "$untracked"
+            exit 1
+          fi
+
+      - name: Assert no deprecation or unexpected warnings
+        run: |
+          set -euo pipefail
+          if grep -n -i -E 'deprecat|unknown property|additional propert' /tmp/gh-aw-validate.log /tmp/gh-aw-compile.log; then
+            echo "::error::Deprecated/unknown frontmatter or unexpected safe-output warnings detected."
+            exit 1
+          fi
+          echo "No deprecation/unknown-property warnings."
