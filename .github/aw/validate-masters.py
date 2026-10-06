@@ -900,6 +900,19 @@ def validate_master(root: Path, master: str, report: Report) -> None:
             f"{label} lock manifest safeoutputs tools must be {EXPECTED_MANIFEST_SAFE_OUTPUTS}, got {servers.get('safeoutputs')}",
         )
 
+    # ---- generated lock: imports must be inlined, not deferred --------------------------
+    # These masters are published for cross-repository `uses:`. At call time the caller's
+    # workspace holds the CALLER's checkout, not this repository's, so a
+    # `{{#runtime-import ...}}` macro naming .github/aw/imports/** could never resolve and the
+    # agent prompt would lose the shared contract core. `inlined-imports: true` must therefore
+    # have actually inlined the imports into the lock at compile time.
+    report.check(
+        "runtime-import" not in lock_text,
+        f"{label} lock must not contain runtime-import macros; inlined-imports requires the "
+        "shared prompt cores inlined at compile time, because a cross-repository caller's "
+        "workspace cannot supply this repository's .github/aw/imports/** at run time",
+    )
+
     # ---- pinned import cache -------------------------------------------------------------
     for entry in spec["imports"]:
         location, _, pin = entry.rpartition("@")

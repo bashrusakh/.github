@@ -51,29 +51,56 @@ jobs:
           gh aw --version
 
       - name: Validate master sources (strict)
+        # Same worktree-path caveat as the compile step below: run the validation from a
+        # checkout whose path has no extra "/.github/" segment so the vendored imports resolve.
         run: |
           set -euo pipefail
-          gh aw validate --strict --no-check-update | tee /tmp/gh-aw-validate.log
+          root="$RUNNER_TEMP/masters"
+          rm -rf "$root"
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE" "$root"
+          ( cd "$root" && gh aw validate --strict --no-check-update ) | tee /tmp/gh-aw-validate.log
 
       - name: Compile (strict) and assert lock freshness
+        # NOTE ON THE WORKTREE PATH. gh-aw v0.89.21 resolves the import workspace root by
+        # cutting a workflow path at the FIRST "/.github/" (pkg/workflow/compiler_yaml_prompt.go,
+        # resolveWorkspaceRoot). actions/checkout places this repository at
+        # "$GITHUB_WORKSPACE" == "/home/runner/work/.github", so the first "/.github/" is the
+        # RUNNER WORKSPACE PARENT, not the repository root. Import resolution then misses the
+        # vendored .github/aw/imports/** cache and the compiler silently degrades to
+        # `{{#runtime-import ...}}` macros instead of inlining the shared prompt cores, which
+        # cannot resolve at run time for a cross-repository caller. Compiling from a fresh
+        # checkout whose path has no extra "/.github/" segment keeps the compiler in the
+        # intended layout. This works around a compiler path bug; the committed locks are
+        # produced the same way and remain the authoritative artifacts.
         run: |
           set -euo pipefail
-          gh aw compile --strict --no-check-update | tee /tmp/gh-aw-compile.log
-          # gh-aw auto-appends a .lock.yml entry to the root .gitattributes on every
-          # compile; that generated side effect is not part of the master contract.
+          root="$RUNNER_TEMP/masters"
+          rm -rf "$root"
+          # A local clone (not `git archive`) so the compiler sees a real git worktree at a
+          # path without an extra "/.github/" segment.
+          git clone --quiet --no-hardlinks "$GITHUB_WORKSPACE" "$root"
+          ( cd "$root" && gh aw compile --strict --no-check-update ) | tee /tmp/gh-aw-compile.log
           git checkout -- .gitattributes 2>/dev/null || true
-          if ! git diff --exit-code; then
-            echo "::error::Lock files are out of sync with their .md sources (or the vendored import cache drifted). Run 'gh aw compile --strict --no-check-update' and commit the result."
-            exit 1
-          fi
+          status=0
+          for lock in $(git ls-files '.github/workflows/*.lock.yml'); do
+            if ! cmp -s "$GITHUB_WORKSPACE/$lock" "$root/$lock"; then
+              echo "::error::$lock is out of sync with its .md source (or the vendored import cache drifted)."
+              status=1
+            fi
+          done
           # git diff does not see untracked files: a master without a committed lock, or a
           # missing vendored import, would otherwise pass this check silently.
           untracked="$(git ls-files --others --exclude-standard -- '.github/workflows/*.lock.yml' '.github/aw/imports' '.github/aw/actions-lock.json')"
           if [ -n "$untracked" ]; then
             echo "::error::Uncommitted generated files under .github/ (missing lock or import cache):"
             echo "$untracked"
+            status=1
+          fi
+          if [ "$status" -ne 0 ]; then
+            echo "::error::Run 'gh aw compile --strict --no-check-update' and commit the result."
             exit 1
           fi
+          echo "All locks are byte-identical to a fresh strict compile."
 
       - name: Assert no deprecation or unexpected warnings
         run: |
