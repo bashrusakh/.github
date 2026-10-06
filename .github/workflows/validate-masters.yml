@@ -42,6 +42,9 @@ jobs:
       - name: Validate the master capability contract (deterministic, no LLM)
         run: python3 .github/aw/validate-masters.py
 
+      - name: Run the validator's negative tests (every tamper must fail closed)
+        run: python3 .github/aw/test-validate-masters.py
+
       - name: Install gh-aw pinned to ${{ env.GH_AW_VERSION }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -9,11 +9,27 @@ the central triage deployment:
 * the shared prompt imports are exactly the expected ones, all at the single audited pin;
 * the agent cannot reach a shell, the CLI proxy, the editor, the repository files, or a diff;
 * the GitHub MCP surface is exactly ``issues`` toolset, this repository, ``min-integrity: none``,
-  and the narrow allowed tool list — no forbidden GitHub tool grant;
+  and the narrow allowed tool list — no forbidden GitHub tool grant in either the manifest
+  comment form or the shell-quoted runtime command form (see ``allow_tool_grants``);
 * the safe-output surface is exactly the label add/remove pair with the expected allow/block
   lists and no comment tool;
 * the masters carry no policy contract of their own: the ``contract_files`` default must name
   caller-owned files, never a file this repository ships.
+
+``--allow-tool`` grant coverage: a compiled lock states the agent's tool grants twice, and
+both statements are parsed and checked against the same forbidden set:
+
+* the *manifest comment* form ``# --allow-tool github(<tool>)`` in the engine-arguments
+  comment block near ``arguments (sorted):``; and
+* the *runtime command* form actually executed by the agent job, where gh-aw
+  shell-escapes the quoting: ``-- /bin/bash -c '... --allow-tool '\\''github(<tool>)'\\'' ...'``.
+  The lock text is normalized first — the sandwich sequence ``'\\''`` (close quote,
+  escaped quote, reopen quote) is collapsed to a single ``'`` — so the runtime grants are
+  read from the real executed command string, not from a comment.
+
+Beyond the two grant forms above, the lock must also never gain a runtime tool grant that
+would let the agent run shell or reach every tool: a runtime ``--allow-tool shell`` (quoted
+or bare) or ``--allow-all-tools`` anywhere in the lock is an error.
 
 The validator is fail-closed: any unparsable input, missing expected key, unexpected value or
 unexpected extra capability is an error, and the process exits non-zero. It has no network
@@ -58,6 +74,13 @@ EXPECTED_MANIFEST_SAFE_OUTPUTS = [
 
 #: The only GitHub MCP tools any master may expose to the agent.
 EXPECTED_GITHUB_TOOLS = ["issue_read", "search_issues"]
+
+#: The complete ``--allow-tool`` token set the compiled agent command may carry, in both the
+#: manifest comment block and the executed runtime command. ``safeoutputs`` is the safe-output
+#: MCP server, not a shell.
+EXPECTED_GRANT_TOKENS = sorted(
+    [f"github({name})" for name in EXPECTED_GITHUB_TOOLS] + ["safeoutputs"]
+)
 
 #: GitHub MCP tools that would expose file contents, patches, diffs or a PR search surface.
 #: None may appear as a grant (in an allow list, a toolset, or a lock ``--allow-tool``).
@@ -138,11 +161,9 @@ MASTER_IDS = ["triage-issue", "triage-pr", "triage-backlog"]
 #: the shell cannot open the redirect target in a directory that does not exist yet, and the
 #: step then reports the file as missing and fails closed.
 #:
-#: ``triage-issue`` is deliberately NOT asserted here: its merged revision predates this
-#: branch and still carries the defect (see the PR report). Enabling the assertion for it
-#: requires a source edit to a master this package was told not to change. Fixing
-#: ``triage-issue``'s loop order is tracked as a follow-up for its owner; until then this
-#: validator must not be the reason that master appears to satisfy a shape it does not.
+#: All three masters assert this. ``triage-issue``'s ordering fix (``mkdir -p`` before the
+#: redirect) landed on ``main`` and is present in this branch's merge result, so the validator
+#: pins the corrected shape for it too rather than exempting it.
 MASTERS = {
     "triage-issue": {
         "imports": [
@@ -156,7 +177,7 @@ MASTERS = {
         "add_labels": (3, False),
         "remove_labels": (3, False),
         "pre_agent_steps": ["Resolve repository policy contract at the trusted Policy SHA"],
-        "policy_step_precreates_parent": False,
+        "policy_step_precreates_parent": True,
     },
     "triage-pr": {
         "imports": [
@@ -430,11 +451,54 @@ def parse_escaped_json(raw: str, origin: str):
     return json.loads(candidate)
 
 
+#: gh-aw emits the agent command through ``/bin/bash -c '<script>'``, so a single quote inside
+#: the script appears as the sandwich ``'\''`` (close quote, backslash-escaped quote, reopen
+#: quote). Collapsing it recovers the exact string the shell hands to the CLI.
+_ESCAPED_QUOTE = "'\\''"
+
+
+def normalize_shell_quoting(lock: str) -> str:
+    """Collapse gh-aw's shell-escaped quote sandwiches (``'\\''`` -> ``'``).
+
+    After this the runtime ``-- /bin/bash -c '...'`` argument reads as the command string the
+    agent job actually executes, so a grant written there is visible to the same regexes used
+    on the manifest comments.
+    """
+    return lock.replace(_ESCAPED_QUOTE, "'")
+
+
+def allow_tool_grants(lock: str) -> list[tuple[str, str]]:
+    """Every ``--allow-tool`` grant in the lock as ``(form, token)`` pairs.
+
+    ``form`` is ``"comment"`` when everything before the grant on its line is whitespace and
+    ``#`` (a manifest comment) and ``"runtime"`` otherwise — i.e. a grant inside the executed
+    ``/bin/bash -c`` command. Both are extracted from the normalized text, so the escaped
+    runtime form (``--allow-tool '\\''github(issue_read)'\\''``) yields the same token as the
+    comment form. A single- or double-quoted token is unquoted.
+    """
+    grants: list[tuple[str, str]] = []
+    normalized = normalize_shell_quoting(lock)
+    pattern = re.compile(r"--allow-tool\s+(?:(['\"])(?P<quoted>[^\s'\"]+)\1|(?P<bare>[^\s'\"]+))")
+    for match in pattern.finditer(normalized):
+        line_start = normalized.rfind("\n", 0, match.start()) + 1
+        prefix = normalized[line_start:match.start()]
+        form = "comment" if prefix.strip(" \t#") == "" else "runtime"
+        token = match.group("quoted") or match.group("bare")
+        grants.append((form, token))
+    return grants
+
+
 def github_grant_names(lock: str) -> set[str]:
-    """All GitHub MCP tool names granted to the agent anywhere in the lock."""
+    """All GitHub MCP tool names granted to the agent anywhere in the lock.
+
+    Covers the manifest comment form, the escaped runtime command form, the compiled
+    ``mcp_servers`` tools array, and the ``GITHUB_TOOLSETS`` environment value.
+    """
     names: set[str] = set()
-    for match in re.finditer(r"--allow-tool ['\"]?github\(([A-Za-z0-9_]+)\)", lock):
-        names.add(match.group(1))
+    for _, token in allow_tool_grants(lock):
+        match = re.fullmatch(r"github\(([A-Za-z0-9_]+)\)", token)
+        if match:
+            names.add(match.group(1))
     for match in re.finditer(r'"name":\s*"github",\s*"tools":\s*\[([^\]]*)\]', lock):
         for name in match.group(1).split(","):
             cleaned = name.strip().strip('"')
@@ -443,6 +507,22 @@ def github_grant_names(lock: str) -> set[str]:
     for match in re.finditer(r'"GITHUB_TOOLSETS":\s*"([^"]*)"', lock):
         names.add("toolset:" + match.group(1))
     return names
+
+
+def runtime_shell_grants(lock: str) -> list[str]:
+    """Runtime grants that would hand the agent a shell or every tool.
+
+    Returns the offending ``--allow-tool`` token for a runtime shell grant and/or the literal
+    ``--allow-all-tools`` flag. The manifest comments are not considered: a comment cannot
+    change what the agent executes, and the compiled command must never carry these.
+    """
+    offenders: list[str] = []
+    for form, token in allow_tool_grants(lock):
+        if form == "runtime" and token == "shell":
+            offenders.append("--allow-tool shell")
+    if "--allow-all-tools" in lock:
+        offenders.append("--allow-all-tools")
+    return offenders
 
 
 # --------------------------------------------------------------------------------------------
@@ -772,6 +852,27 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     )
     for flag in ("--allow-all-tools", "--allow-all-paths", "--allow-tool write", "--allow-tool 'write'"):
         report.check(flag not in lock_text, f"{label} lock must not contain {flag!r}")
+
+    # Both grant statements — the manifest comment block and the shell-escaped runtime command
+    # actually executed by the agent job — must declare the same token set, and no other.
+    comment_tokens = sorted(t for form, t in allow_tool_grants(lock_text) if form == "comment")
+    runtime_tokens = sorted(t for form, t in allow_tool_grants(lock_text) if form == "runtime")
+    report.check(
+        comment_tokens == EXPECTED_GRANT_TOKENS,
+        f"{label} lock manifest comment --allow-tool tokens must be {EXPECTED_GRANT_TOKENS}, "
+        f"got {comment_tokens}",
+    )
+    report.check(
+        runtime_tokens == EXPECTED_GRANT_TOKENS,
+        f"{label} lock runtime command --allow-tool tokens must be {EXPECTED_GRANT_TOKENS}, "
+        f"got {runtime_tokens}",
+    )
+    for offender in runtime_shell_grants(lock_text):
+        report.fail(
+            f"{label} lock runtime command must not grant {offender}: a shell or all-tools grant "
+            "defeats the metadata-only envelope"
+        )
+
     grants = github_grant_names(lock_text)
     tool_grants = sorted(n for n in grants if not n.startswith("toolset:"))
     toolset_grants = sorted(n for n in grants if n.startswith("toolset:"))
