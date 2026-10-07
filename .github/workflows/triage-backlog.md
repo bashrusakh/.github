@@ -32,7 +32,7 @@ engine:
     queue: max
   env:
     COPILOT_PROVIDER_BASE_URL: "https://opencode.ai/zen/v1"
-    COPILOT_PROVIDER_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+    COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
     COPILOT_PROVIDER_TYPE: openai
 models:
   default-ai-credits-pricing:
