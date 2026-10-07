@@ -245,13 +245,13 @@ LABELS_REMOVE = {
 
 EXPECTED_ENGINE = {
     "id": "copilot",
-    "model": "glm-5.3-flash",
+    "model": "mimo-v2.6-flash-free",
     "bare": True,
     "args": ["--deny-tool", "shell"],
     "group": "gh-aw-triage-${{ github.repository }}",
     "queue": "max",
 }
-EXPECTED_NETWORK = ["defaults", "github", "ollama.com"]
+EXPECTED_NETWORK = ["defaults", "github", "opencode.ai"]
 EXPECTED_MAX_TURNS = 20
 EXPECTED_TIMEOUT = 20
 
