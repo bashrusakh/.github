@@ -35,6 +35,76 @@ RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 #: generated config copies, so a tamper cannot silently apply to the wrong place.
 CASES = [
     (
+        "source_byok_uses_wrong_secret",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.WRONG_API_KEY }}",
+            )
+        ],
+        ("engine BYOK key must reference secrets.TRIAGE_API_KEY",),
+    ),
+    (
+        "compiled_secret_declaration_renamed",
+        [
+            (
+                ".github/workflows/triage-pr.lock.yml",
+                "      TRIAGE_API_KEY:\n        required: false",
+                "      WRONG_API_KEY:\n        required: false",
+            )
+        ],
+        ("lock workflow_call must declare TRIAGE_API_KEY",),
+    ),
+    (
+        "compiled_byok_uses_wrong_secret",
+        [
+            (
+                ".github/workflows/triage-backlog.lock.yml",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.WRONG_API_KEY }}",
+                2,
+            )
+        ],
+        (
+            "lock agent BYOK key must reference secrets.TRIAGE_API_KEY",
+            "lock detection BYOK key must reference secrets.TRIAGE_API_KEY",
+        ),
+    ),
+    (
+        "compiled_manifest_omits_neutral_secret",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                ',"TRIAGE_API_KEY"]',
+                ']',
+            )
+        ],
+        ("lock manifest must list TRIAGE_API_KEY",),
+    ),
+    (
+        "provider_specific_secret_retained_in_source",
+        [
+            (
+                ".github/workflows/triage-pr.md",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}",
+                "COPILOT_PROVIDER_API_KEY: ${{ secrets.OPENCODE_API_KEY }}",
+            )
+        ],
+        ("source must not retain provider-specific credential names",),
+    ),
+    (
+        "provider_specific_secret_retained_in_lock",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                "      TRIAGE_API_KEY:\n        required: false",
+                "      OLLAMA_API_KEY:\n        required: false",
+            )
+        ],
+        ("lock must not retain provider-specific credential names",),
+    ),
+    (
         "add_labels_per_call_limit_widened_in_source",
         [
             (

@@ -6,6 +6,7 @@ Validates each master's source (``.github/workflows/<id>.md``) and generated
 the central triage deployment:
 
 * the workflow is reusable (``on: workflow_call``) and silent (``status-comment: false``);
+* the neutral ``TRIAGE_API_KEY`` secret reaches the compiled Copilot BYOK jobs;
 * the shared prompt imports are exactly the expected ones, all at the single audited pin;
 * the agent cannot reach a shell, the CLI proxy, the editor, the repository files, or a diff;
 * the GitHub MCP surface is exactly ``issues`` toolset, this repository, ``min-integrity: none``,
@@ -683,6 +684,32 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         dig(fm, "engine.concurrency.queue") == (True, EXPECTED_ENGINE["queue"]),
         f"{label} engine.concurrency.queue must be 'max'",
     )
+    report.check(
+        dig(fm, "engine.env.COPILOT_PROVIDER_API_KEY")
+        == (True, "${{ secrets.TRIAGE_API_KEY }}"),
+        f"{label} engine BYOK key must reference secrets.TRIAGE_API_KEY",
+    )
+    # gh-aw derives workflow_call secrets from referenced secrets; source need not
+    # duplicate the declaration. Check the generated interface and both BYOK jobs.
+    lock_call = parse_frontmatter(
+        "---\n" + lock_text.split("\njobs:", 1)[0] + "\n---", lock_path.name
+    )
+    report.check(
+        dig(lock_call, "on.workflow_call.secrets.TRIAGE_API_KEY")
+        == (True, {"required": False}),
+        f"{label} lock workflow_call must declare TRIAGE_API_KEY",
+    )
+    for job in ("agent", "detection"):
+        block = lock_job_block(lock_text, job) or ""
+        report.check(
+            "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}" in block,
+            f"{label} lock {job} BYOK key must reference secrets.TRIAGE_API_KEY",
+        )
+    for text, surface in ((source_text, "source"), (lock_text, "lock")):
+        report.check(
+            "OPENCODE_API_KEY" not in text and "OLLAMA_API_KEY" not in text,
+            f"{label} {surface} must not retain provider-specific credential names",
+        )
 
     # ---- budgets -------------------------------------------------------------------------
     report.check(
@@ -1061,6 +1088,10 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         except json.JSONDecodeError as exc:
             report.fail(f"{label} lock gh-aw-manifest is not JSON: {exc}")
     if isinstance(manifest, dict):
+        report.check(
+            "TRIAGE_API_KEY" in manifest.get("secrets", []),
+            f"{label} lock manifest must list TRIAGE_API_KEY",
+        )
         gateway = next(
             (c for c in manifest.get("containers", []) if isinstance(c, dict)
              and str(c.get("image", "")).startswith("ghcr.io/github/gh-aw-mcpg:")),
