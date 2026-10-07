@@ -246,13 +246,16 @@ LABELS_REMOVE = {
 
 EXPECTED_ENGINE = {
     "id": "copilot",
-    "model": "mimo-v2.6-flash-free",
+    "model": "glm-5.3-flash",
     "bare": True,
     "args": ["--deny-tool", "shell"],
     "group": "gh-aw-triage-${{ github.repository }}",
     "queue": "max",
 }
-EXPECTED_NETWORK = ["defaults", "github", "opencode.ai"]
+EXPECTED_PROVIDER_BASE_URL = "https://ollama.com/v1"
+EXPECTED_PROVIDER_TYPE = "openai"
+EXPECTED_PROVIDER_HOST = "ollama.com"
+EXPECTED_NETWORK = ["defaults", "github", EXPECTED_PROVIDER_HOST]
 EXPECTED_MAX_TURNS = 20
 EXPECTED_TIMEOUT = 20
 
@@ -689,6 +692,14 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         == (True, "${{ secrets.TRIAGE_API_KEY }}"),
         f"{label} engine BYOK key must reference secrets.TRIAGE_API_KEY",
     )
+    for key, expected in (
+        ("COPILOT_PROVIDER_BASE_URL", EXPECTED_PROVIDER_BASE_URL),
+        ("COPILOT_PROVIDER_TYPE", EXPECTED_PROVIDER_TYPE),
+    ):
+        report.check(
+            dig(fm, f"engine.env.{key}") == (True, expected),
+            f"{label} engine {key} must be {expected!r}",
+        )
     # gh-aw derives workflow_call secrets from referenced secrets; source need not
     # duplicate the declaration. Check the generated interface and both BYOK jobs.
     lock_call = parse_frontmatter(
@@ -702,10 +713,29 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     for job in ("agent", "detection"):
         block = lock_job_block(lock_text, job) or ""
         report.check(
+            f'"targets":{{"copilot":{{"host":"{EXPECTED_PROVIDER_HOST}"}}}}'
+            in block.replace('\\"', '"'),
+            f"{label} lock {job} BYOK proxy must target {EXPECTED_PROVIDER_HOST}",
+        )
+        for key, expected in (
+            ("COPILOT_PROVIDER_BASE_URL", EXPECTED_PROVIDER_BASE_URL),
+            ("COPILOT_PROVIDER_TYPE", EXPECTED_PROVIDER_TYPE),
+            ("COPILOT_MODEL", EXPECTED_ENGINE["model"]),
+        ):
+            report.check(
+                re.findall(rf"(?m)^\s+{key}: (.+)$", block) == [expected],
+                f"{label} lock {job} {key} must be {expected!r}",
+            )
+        report.check(
             "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}" in block,
             f"{label} lock {job} BYOK key must reference secrets.TRIAGE_API_KEY",
         )
     for text, surface in ((source_text, "source"), (lock_text, "lock")):
+        report.check(
+            all(marker not in text for marker in
+                ("opencode.ai", "mimo-v2.6-flash-free", "gpt-6-luna", "openai.com")),
+            f"{label} {surface} must not retain another provider endpoint or model",
+        )
         report.check(
             "OPENCODE_API_KEY" not in text and "OLLAMA_API_KEY" not in text,
             f"{label} {surface} must not retain provider-specific credential names",

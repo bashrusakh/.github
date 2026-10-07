@@ -19,11 +19,23 @@ secrets:
   TRIAGE_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
 ```
 
-The masters consume it as `COPILOT_PROVIDER_API_KEY` for Copilot BYOK. The current
-model is `mimo-v2.6-flash-free` at `https://opencode.ai/zen/v1`. Keep provider
-configuration central and the incoming secret name neutral. Switching providers
-may still require rotating the key value; unchanged wiring does not provision
-credentials. Never place key values in workflow files.
+The masters consume it as `COPILOT_PROVIDER_API_KEY` for Copilot BYOK with provider
+type `openai` (Ollama's OpenAI-compatible API). The configured model is
+`glm-5.3-flash` at `https://ollama.com/v1`, with `ollama.com` as the provider
+network allowance. Keep provider configuration central and the incoming secret
+name neutral.
+
+Before running provider inference, rotate existing OpenCode key values to
+Ollama API keys in each caller's `TRIAGE_API_KEY` secret. Unchanged wiring does
+not provision credentials; OpenCode keys and OpenAI OAuth credentials do not
+authenticate to this Ollama endpoint. GitHub does not expose stored secret
+values for recovering an old `OLLAMA_API_KEY`; obtain a valid Ollama key instead.
+Never place key values in workflow files.
+
+Local validation and compilation do not verify authentication, model access,
+or available Ollama quota. The previous deployment encountered a weekly quota
+limit; restoring its configuration does not establish that quota is available
+now. No operational canary or successful provider inference is asserted here.
 
 Callers retain their own triggers, permissions, and `contract_files`. The
 metadata-only tool and label restrictions and trusted caller-policy resolution

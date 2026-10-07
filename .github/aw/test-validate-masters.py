@@ -35,6 +35,72 @@ RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 #: generated config copies, so a tamper cannot silently apply to the wrong place.
 CASES = [
     (
+        "compiled_wrong_proxy_target",
+        [(".github/workflows/triage-issue.lock.yml",
+          '"targets":{"copilot":{"host":"ollama.com"}}',
+          '"targets":{"copilot":{"host":"wrong.example"}}')],
+        ("lock agent BYOK proxy must target ollama.com",),
+    ),
+    (
+        "source_old_model_retained",
+        [(".github/workflows/triage-issue.md", "model: glm-5.3-flash",
+          "model: mimo-v2.6-flash-free")],
+        ("engine.model must be 'glm-5.3-flash'",),
+    ),
+    (
+        "source_old_endpoint_retained",
+        [(".github/workflows/triage-pr.md", "https://ollama.com/v1",
+          "https://opencode.ai/zen/v1")],
+        ("engine COPILOT_PROVIDER_BASE_URL must be 'https://ollama.com/v1'",),
+    ),
+    (
+        "source_wrong_provider_type",
+        [(".github/workflows/triage-backlog.md", "COPILOT_PROVIDER_TYPE: openai",
+          "COPILOT_PROVIDER_TYPE: anthropic")],
+        ("engine COPILOT_PROVIDER_TYPE must be 'openai'",),
+    ),
+    (
+        "source_old_provider_domain_retained",
+        [(".github/workflows/triage-issue.md", "[defaults, github, ollama.com]",
+          "[defaults, github, opencode.ai]")],
+        ("network.allowed must be exactly",),
+    ),
+    (
+        "compiled_old_endpoint_retained",
+        [(".github/workflows/triage-pr.lock.yml",
+          "COPILOT_PROVIDER_BASE_URL: https://ollama.com/v1",
+          "COPILOT_PROVIDER_BASE_URL: https://opencode.ai/zen/v1", 2)],
+        ("lock agent COPILOT_PROVIDER_BASE_URL must be",
+         "lock detection COPILOT_PROVIDER_BASE_URL must be"),
+    ),
+    (
+        "compiled_old_model_retained",
+        [(".github/workflows/triage-backlog.lock.yml", "COPILOT_MODEL: glm-5.3-flash",
+          "COPILOT_MODEL: mimo-v2.6-flash-free", 2)],
+        ("lock agent COPILOT_MODEL must be", "lock detection COPILOT_MODEL must be"),
+    ),
+    (
+        "compiled_wrong_provider_type",
+        [(".github/workflows/triage-issue.lock.yml", "COPILOT_PROVIDER_TYPE: openai",
+          "COPILOT_PROVIDER_TYPE: anthropic", 2)],
+        ("lock agent COPILOT_PROVIDER_TYPE must be",
+         "lock detection COPILOT_PROVIDER_TYPE must be"),
+    ),
+    (
+        "unpublished_luna_model_reintroduced",
+        [(".github/workflows/triage-pr.md", "model: glm-5.3-flash",
+          "model: gpt-6-luna")],
+        ("engine.model must be 'glm-5.3-flash'",
+         "source must not retain another provider endpoint or model"),
+    ),
+    (
+        "unpublished_openai_domain_reintroduced",
+        [(".github/workflows/triage-backlog.md", "[defaults, github, ollama.com]",
+          "[defaults, github, api.openai.com, openai.com]")],
+        ("network.allowed must be exactly",
+         "source must not retain another provider endpoint or model"),
+    ),
+    (
         "source_byok_uses_wrong_secret",
         [
             (
