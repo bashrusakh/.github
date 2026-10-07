@@ -182,6 +182,7 @@ MASTERS = {
         "max_ai_credits": 5,
         "github_allowed": [("issue_read", 8), ("search_issues", 3)],
         "add_labels": (3, False),
+        "max_labels_per_add": 3,
         "remove_labels": (3, False),
         "pre_agent_steps": ["Resolve repository policy contract at the trusted Policy SHA"],
         "policy_step_precreates_parent": True,
@@ -198,6 +199,7 @@ MASTERS = {
         "max_ai_credits": 8,
         "github_allowed": [("issue_read", 4), ("search_issues", 2)],
         "add_labels": (3, False),
+        "max_labels_per_add": 3,
         "remove_labels": (3, False),
         "pre_agent_steps": [
             "Resolve repository policy contract at the trusted Policy SHA",
@@ -219,6 +221,7 @@ MASTERS = {
         "max_ai_credits": 10,
         "github_allowed": [("issue_read", 12), ("search_issues", 3)],
         "add_labels": (5, False),
+        "max_labels_per_add": 5,
         "remove_labels": (5, False),
         "pre_agent_steps": [
             "Resolve repository policy contract at the trusted Policy SHA",
@@ -734,7 +737,12 @@ def validate_master(root: Path, master: str, report: Report) -> None:
             )
 
     add_max, add_issue_intent = spec["add_labels"]
+    max_labels_per_add = spec["max_labels_per_add"]
     remove_max, _ = spec["remove_labels"]
+    report.check(
+        dig(fm, "safe-outputs.add-labels.max-labels") == (True, max_labels_per_add),
+        f"{label} safe-outputs.add-labels.max-labels must be {max_labels_per_add}",
+    )
 
     for key, expected_labels, expected_max in (
         ("add-labels", LABELS_ADD[master], add_max),
@@ -1025,6 +1033,11 @@ def validate_master(root: Path, master: str, report: Report) -> None:
                 )
             add_block = config.get("add_labels")
             if isinstance(add_block, dict):
+                report.check(
+                    add_block.get("max_labels") == max_labels_per_add,
+                    f"{label} lock add_labels.max_labels must be {max_labels_per_add}, "
+                    f"got {add_block.get('max_labels')}",
+                )
                 report.check(
                     add_block.get("issue_intent") is False,
                     f"{label} lock add_labels.issue_intent must be false",

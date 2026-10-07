@@ -190,6 +190,7 @@ safe-outputs:
     max: 1
     report-as-issue: false
   add-labels:
+    max-labels: 5
     # Disable issue-intent metadata (rationale/confidence/suggest) for label adds: the
     # exposed tool schema drops those fields and the handler never routes a label through
     # pending-suggestion review. Triage applies labels directly; a suggestion would be a

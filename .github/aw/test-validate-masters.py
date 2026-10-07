@@ -30,10 +30,33 @@ ESCAPED_QUOTE = "'\\''"
 #: The exact runtime grant token gh-aw emits for the declared GitHub tools.
 RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 
-#: ``(case, edits, expected error substrings)``. Each edit is ``(relative path, old, new)``;
-#: every ``old`` must occur exactly once in its file, so a tamper can never silently apply to
-#: the wrong place.
+#: ``(case, edits, expected error substrings)``. Each edit is ``(relative path, old, new)``
+#: and must match once; an optional fourth item sets the expected match count for repeated
+#: generated config copies, so a tamper cannot silently apply to the wrong place.
 CASES = [
+    (
+        "add_labels_per_call_limit_widened_in_source",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  add-labels:\n    max-labels: 3\n",
+                "  add-labels:\n    max-labels: 10\n",
+            )
+        ],
+        ("safe-outputs.add-labels.max-labels must be 3",),
+    ),
+    (
+        "add_labels_per_call_limit_widened_in_lock",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                '\\"max_labels\\":3',
+                '\\"max_labels\\":10',
+                2,
+            )
+        ],
+        ("lock add_labels.max_labels must be 3",),
+    ),
     (
         "noop_limit_widened",
         [
@@ -237,18 +260,22 @@ def main() -> int:
             root = workspace / case
             copytree(root)
             applied = True
-            for rel_path, old, new in edits:
+            for edit in edits:
+                rel_path, old, new = edit[:3]
+                expected_occurrences = edit[3] if len(edit) == 4 else 1
                 target = root / rel_path
                 text = target.read_text(encoding="utf-8")
                 occurrences = text.count(old)
-                if occurrences != 1:
+                if occurrences != expected_occurrences:
                     failures.append(
                         f"{case}: tamper anchor occurs {occurrences} times in {rel_path}, "
-                        "expected 1"
+                        f"expected {expected_occurrences}"
                     )
                     applied = False
                     continue
-                target.write_text(text.replace(old, new, 1), encoding="utf-8")
+                target.write_text(
+                    text.replace(old, new, expected_occurrences), encoding="utf-8"
+                )
             if not applied:
                 continue
 
