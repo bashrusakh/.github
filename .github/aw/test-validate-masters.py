@@ -30,10 +30,110 @@ ESCAPED_QUOTE = "'\\''"
 #: The exact runtime grant token gh-aw emits for the declared GitHub tools.
 RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 
-#: ``(case, edits, expected error substrings)``. Each edit is ``(relative path, old, new)``;
-#: every ``old`` must occur exactly once in its file, so a tamper can never silently apply to
-#: the wrong place.
+#: ``(case, edits, expected error substrings)``. Each edit is ``(relative path, old, new)``
+#: and must match once; an optional fourth item sets the expected match count for repeated
+#: generated config copies, so a tamper cannot silently apply to the wrong place.
 CASES = [
+    (
+        "add_labels_per_call_limit_widened_in_source",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  add-labels:\n    max-labels: 3\n",
+                "  add-labels:\n    max-labels: 10\n",
+            )
+        ],
+        ("safe-outputs.add-labels.max-labels must be 3",),
+    ),
+    (
+        "add_labels_per_call_limit_widened_in_lock",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                '\\"max_labels\\":3',
+                '\\"max_labels\\":10',
+                2,
+            )
+        ],
+        ("lock add_labels.max_labels must be 3",),
+    ),
+    (
+        "noop_limit_widened",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  noop:\n    max: 1\n    report-as-issue: false\n",
+                "  noop:\n    max: 2\n    report-as-issue: false\n",
+            )
+        ],
+        ("safe-outputs.noop.max must remain 1",),
+    ),
+    (
+        "workflow_tool_not_denied",
+        [
+            (
+                ".github/workflows/triage-pr.lock.yml",
+                "--deny-tool workflow ",
+                "",
+            )
+        ],
+        ("must pass '--deny-tool workflow' exactly once, found 0",),
+    ),
+    (
+        "dynamic_safeoutput_added",
+        [
+            (
+                ".github/workflows/triage-backlog.lock.yml",
+                '"dynamic_tools": []',
+                '"dynamic_tools": [{"name":"unexpected"}]',
+            )
+        ],
+        ("must not expose dynamic safe-output tools",),
+    ),
+    (
+        "ci_compiler_pin_mismatch",
+        [
+            (
+                ".github/workflows/validate-masters.yml",
+                "  GH_AW_VERSION: v0.91.4\n",
+                "  GH_AW_VERSION: v0.89.21\n",
+            )
+        ],
+        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.4",),
+    ),
+    (
+        "compiled_gateway_pin_mismatch",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.29"',
+                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.28"',
+            )
+        ],
+        ("lock must pin gateway ghcr.io/github/gh-aw-mcpg:v0.4.29",),
+    ),
+    (
+        "report_incomplete_issue_writer_enabled",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  report-incomplete:\n    create-issue: false\n",
+                "  report-incomplete:\n    create-issue: true\n",
+            )
+        ],
+        ("safe-outputs.report-incomplete.create-issue must be false",),
+    ),
+    (
+        "missing_tool_issue_writer_enabled",
+        [
+            (
+                ".github/workflows/triage-backlog.md",
+                "  missing-tool:\n    create-issue: false\n",
+                "  missing-tool:\n    create-issue: true\n",
+            )
+        ],
+        ("safe-outputs.missing-tool.create-issue must be false",),
+    ),
     (
         "forbidden_tool_in_source_allowed",
         [
@@ -160,18 +260,22 @@ def main() -> int:
             root = workspace / case
             copytree(root)
             applied = True
-            for rel_path, old, new in edits:
+            for edit in edits:
+                rel_path, old, new = edit[:3]
+                expected_occurrences = edit[3] if len(edit) == 4 else 1
                 target = root / rel_path
                 text = target.read_text(encoding="utf-8")
                 occurrences = text.count(old)
-                if occurrences != 1:
+                if occurrences != expected_occurrences:
                     failures.append(
                         f"{case}: tamper anchor occurs {occurrences} times in {rel_path}, "
-                        "expected 1"
+                        f"expected {expected_occurrences}"
                     )
                     applied = False
                     continue
-                target.write_text(text.replace(old, new, 1), encoding="utf-8")
+                target.write_text(
+                    text.replace(old, new, expected_occurrences), encoding="utf-8"
+                )
             if not applied:
                 continue
 
