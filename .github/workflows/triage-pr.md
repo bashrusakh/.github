@@ -68,7 +68,7 @@ tools:
     # is metadata-only. If abuse appears, add blocked-users / trusted-users / approval-labels.
     allowed-repos: ["${{ github.repository }}"]
     min-integrity: none
-    # max-calls is declared intent; gh-aw v0.89.21 currently drops it at compile time (no tool-call-limits in locks). Revisit when the compiler emits limits.
+    # max-calls is declared intent; gh-aw v0.91.4 currently drops it at compile time (no tool-call-limits in locks). Revisit when the compiler emits limits.
     # No 'pull_requests' toolset: it exposes pull_request_read (with get_diff/get_files)
     # and list_pull_requests, which the CLI does not filter down to the declared allowed
     # list, so a PR-search capability would become agent-visible. The PR subject,
@@ -153,6 +153,15 @@ pre-agent-steps:
 safe-outputs:
   report-failure-as-issue: false
   report-failed-jobs: false
+  missing-tool:
+    create-issue: false
+  missing-data:
+    create-issue: false
+  report-incomplete:
+    create-issue: false
+  noop:
+    max: 1
+    report-as-issue: false
   add-labels:
     # Disable issue-intent metadata (rationale/confidence/suggest) for label adds: the
     # exposed tool schema drops those fields and the handler never routes a label through

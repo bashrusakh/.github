@@ -60,6 +60,10 @@ SHARED_PIN = "e2de4a989077b7fdf558ef5656040dc2e547e674"
 SHARED_REPO = "bashrusakh/repo-docs-sync"
 SHARED_DIR = "packages/ghaw-triage/workflows"
 
+GH_AW_VERSION = "v0.91.4"
+MCP_GATEWAY_IMAGE = "ghcr.io/github/gh-aw-mcpg:v0.4.29"
+MCP_GATEWAY_DIGEST = "sha256:ec08867ac8a4823e01efb2de2ba85a313199bb7ae666ef70ae58effc162a9bf3"
+
 #: Vendored import cache location, mirroring gh-aw's own layout.
 VENDOR_ROOT = ".github/aw/imports"
 
@@ -70,6 +74,7 @@ EXPECTED_MANIFEST_SAFE_OUTPUTS = [
     "missing_tool",
     "noop",
     "remove_labels",
+    "report_incomplete",
 ]
 
 #: The only GitHub MCP tools any master may expose to the agent.
@@ -119,6 +124,9 @@ FORBIDDEN_SAFE_OUTPUTS = [
     "update_pull_request",
     "push_to_pull_request_branch",
     "create_discussion",
+    "create_report_incomplete_issue",
+    "create_missing_tool_issue",
+    "create_missing_data_issue",
     "close_discussion",
     "assign_to_user",
     "assign_to_agent",
@@ -127,10 +135,9 @@ FORBIDDEN_SAFE_OUTPUTS = [
     "get_secret",
 ]
 
-#: Safe-output keys gh-aw always emits alongside the declared label tools: the no-op /
-#: missing-fact machine signals and the report plumbing. They carry no repository mutation.
+#: Safe-output keys gh-aw emits alongside the declared label tools. ``report_incomplete`` is
+#: a diagnostic signal only; the issue-creation handler is deliberately excluded below.
 BUILTIN_SAFE_OUTPUTS = [
-    "create_report_incomplete_issue",
     "missing_data",
     "missing_tool",
     "noop",
@@ -701,6 +708,23 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         dig(fm, "safe-outputs.report-failed-jobs") == (True, False),
         f"{label} safe-outputs.report-failed-jobs must be false",
     )
+    report.check(
+        dig(fm, "safe-outputs.noop.max") == (True, 1),
+        f"{label} safe-outputs.noop.max must remain 1",
+    )
+    report.check(
+        dig(fm, "safe-outputs.noop.report-as-issue") == (True, False),
+        f"{label} safe-outputs.noop.report-as-issue must be false",
+    )
+    report.check(
+        dig(fm, "safe-outputs.report-incomplete.create-issue") == (True, False),
+        f"{label} safe-outputs.report-incomplete.create-issue must be false",
+    )
+    for signal in ("missing-tool", "missing-data"):
+        report.check(
+            dig(fm, f"safe-outputs.{signal}.create-issue") == (True, False),
+            f"{label} safe-outputs.{signal}.create-issue must be false",
+        )
     found, safe_outputs = dig(fm, "safe-outputs")
     if isinstance(safe_outputs, dict):
         for forbidden in ("add-comment", "add_comment", "create-issue", "create-pull-request"):
@@ -850,6 +874,24 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         f"{label} lock must pass '--deny-tool shell' exactly once, found "
         f"{lock_text.count('--deny-tool shell')}",
     )
+    report.check(
+        lock_text.count("--deny-tool workflow") == 1,
+        f"{label} lock must pass '--deny-tool workflow' exactly once, found "
+        f"{lock_text.count('--deny-tool workflow')}",
+    )
+    report.check(
+        lock_text.count("--disable-builtin-mcps") == 1,
+        f"{label} lock must disable built-in MCPs exactly once, found "
+        f"{lock_text.count('--disable-builtin-mcps')}",
+    )
+    report.check(
+        lock_text.count('"dynamic_tools": []') == 1,
+        f"{label} lock must not expose dynamic safe-output tools",
+    )
+    report.check(
+        "create_labels" not in lock_text,
+        f"{label} lock must not enable automatic label creation",
+    )
     for flag in ("--allow-all-tools", "--allow-all-paths", "--allow-tool write", "--allow-tool 'write'"):
         report.check(flag not in lock_text, f"{label} lock must not contain {flag!r}")
 
@@ -915,6 +957,15 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         and 'GH_AW_FAILURE_REPORT_AS_ISSUE: "true"' not in lock_text,
         f"{label} lock must report failure as issue = false",
     )
+    for env_key in (
+        "GH_AW_MISSING_TOOL_CREATE_ISSUE",
+        "GH_AW_REPORT_INCOMPLETE_CREATE_ISSUE",
+    ):
+        report.check(
+            f'{env_key}: "false"' in lock_text
+            and f'{env_key}: "true"' not in lock_text,
+            f"{label} lock must disable {env_key}",
+        )
     report.check(
         "report_failed_jobs" not in lock_text,
         f"{label} lock must not report failed jobs (report-failed-jobs: false)",
@@ -966,6 +1017,12 @@ def validate_master(root: Path, master: str, report: Report) -> None:
                         block.get("max") == (add_max if key == "add_labels" else remove_max),
                         f"{label} lock {key}.max must be {add_max if key == 'add_labels' else remove_max}",
                     )
+            noop = config.get("noop")
+            if isinstance(noop, dict):
+                report.check(
+                    noop.get("max") == 1 and noop.get("report-as-issue") == "false",
+                    f"{label} lock noop must preserve max=1 and report-as-issue=false",
+                )
             add_block = config.get("add_labels")
             if isinstance(add_block, dict):
                 report.check(
@@ -991,6 +1048,18 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         except json.JSONDecodeError as exc:
             report.fail(f"{label} lock gh-aw-manifest is not JSON: {exc}")
     if isinstance(manifest, dict):
+        gateway = next(
+            (c for c in manifest.get("containers", []) if isinstance(c, dict)
+             and str(c.get("image", "")).startswith("ghcr.io/github/gh-aw-mcpg:")),
+            None,
+        )
+        report.check(
+            gateway is not None
+            and gateway.get("image") == MCP_GATEWAY_IMAGE
+            and gateway.get("digest") == MCP_GATEWAY_DIGEST
+            and gateway.get("pinned_image") == f"{MCP_GATEWAY_IMAGE}@{MCP_GATEWAY_DIGEST}",
+            f"{label} lock must pin gateway {MCP_GATEWAY_IMAGE}@{MCP_GATEWAY_DIGEST}",
+        )
         servers = {server.get("name"): server.get("tools") for server in manifest.get("mcp_servers", [])}
         report.check(
             servers.get("github") == EXPECTED_GITHUB_TOOLS,
@@ -999,6 +1068,20 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         report.check(
             servers.get("safeoutputs") == EXPECTED_MANIFEST_SAFE_OUTPUTS,
             f"{label} lock manifest safeoutputs tools must be {EXPECTED_MANIFEST_SAFE_OUTPUTS}, got {servers.get('safeoutputs')}",
+        )
+    report.check(
+        f'"compiler_version":"{GH_AW_VERSION}"' in lock_text
+        and f"gh-aw ({GH_AW_VERSION})" in lock_text,
+        f"{label} lock must be generated by gh-aw {GH_AW_VERSION}",
+    )
+    for writer in (
+        "create_report_incomplete_issue",
+        "create_missing_tool_issue",
+        "create_missing_data_issue",
+    ):
+        report.check(
+            f'"{writer}"' not in lock_text,
+            f"{label} lock must not configure diagnostic issue writer {writer!r}",
         )
 
     # ---- generated lock: imports must be inlined, not deferred --------------------------
@@ -1029,6 +1112,12 @@ def validate_master(root: Path, master: str, report: Report) -> None:
 
 def validate_shared(report: Report, root: Path) -> None:
     """Repository-wide assertions that no single master can own."""
+    ci_workflow = root / ".github" / "workflows" / "validate-masters.yml"
+    ci_text = ci_workflow.read_text(encoding="utf-8") if ci_workflow.is_file() else ""
+    report.check(
+        ci_text.count(f"GH_AW_VERSION: {GH_AW_VERSION}") == 1,
+        f"validate-masters workflow must pin GH_AW_VERSION to {GH_AW_VERSION}",
+    )
     import_dirs = sorted(
         p.name for p in (root / VENDOR_ROOT / SHARED_REPO).iterdir() if p.is_dir()
     ) if (root / VENDOR_ROOT / SHARED_REPO).is_dir() else []

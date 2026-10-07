@@ -35,6 +35,83 @@ RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 #: the wrong place.
 CASES = [
     (
+        "noop_limit_widened",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  noop:\n    max: 1\n    report-as-issue: false\n",
+                "  noop:\n    max: 2\n    report-as-issue: false\n",
+            )
+        ],
+        ("safe-outputs.noop.max must remain 1",),
+    ),
+    (
+        "workflow_tool_not_denied",
+        [
+            (
+                ".github/workflows/triage-pr.lock.yml",
+                "--deny-tool workflow ",
+                "",
+            )
+        ],
+        ("must pass '--deny-tool workflow' exactly once, found 0",),
+    ),
+    (
+        "dynamic_safeoutput_added",
+        [
+            (
+                ".github/workflows/triage-backlog.lock.yml",
+                '"dynamic_tools": []',
+                '"dynamic_tools": [{"name":"unexpected"}]',
+            )
+        ],
+        ("must not expose dynamic safe-output tools",),
+    ),
+    (
+        "ci_compiler_pin_mismatch",
+        [
+            (
+                ".github/workflows/validate-masters.yml",
+                "  GH_AW_VERSION: v0.91.4\n",
+                "  GH_AW_VERSION: v0.89.21\n",
+            )
+        ],
+        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.4",),
+    ),
+    (
+        "compiled_gateway_pin_mismatch",
+        [
+            (
+                ".github/workflows/triage-issue.lock.yml",
+                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.29"',
+                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.28"',
+            )
+        ],
+        ("lock must pin gateway ghcr.io/github/gh-aw-mcpg:v0.4.29",),
+    ),
+    (
+        "report_incomplete_issue_writer_enabled",
+        [
+            (
+                ".github/workflows/triage-issue.md",
+                "  report-incomplete:\n    create-issue: false\n",
+                "  report-incomplete:\n    create-issue: true\n",
+            )
+        ],
+        ("safe-outputs.report-incomplete.create-issue must be false",),
+    ),
+    (
+        "missing_tool_issue_writer_enabled",
+        [
+            (
+                ".github/workflows/triage-backlog.md",
+                "  missing-tool:\n    create-issue: false\n",
+                "  missing-tool:\n    create-issue: true\n",
+            )
+        ],
+        ("safe-outputs.missing-tool.create-issue must be false",),
+    ),
+    (
         "forbidden_tool_in_source_allowed",
         [
             (

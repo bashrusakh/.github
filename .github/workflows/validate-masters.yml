@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GH_AW_VERSION: v0.89.21
+  GH_AW_VERSION: v0.91.4
 
 jobs:
   validate:
