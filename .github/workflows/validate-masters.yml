@@ -30,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GH_AW_VERSION: v0.91.4
+  GH_AW_VERSION: v0.91.5
 
 jobs:
   validate:
@@ -52,6 +52,7 @@ jobs:
           set -euo pipefail
           gh extension install github/gh-aw --pin "$GH_AW_VERSION" --force
           gh aw --version
+          test "$(gh aw --version)" = "gh aw version $GH_AW_VERSION"
 
       - name: Validate master sources (strict)
         # Same worktree-path caveat as the compile step below: run the validation from a

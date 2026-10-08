@@ -6,6 +6,8 @@ This intentionally trusts the central repository's `main`: later central model,
 endpoint, and workflow changes take effect without editing callers. Unlike an
 immutable revision, it does not freeze the reviewed workflow implementation.
 Compiler, action, container, and shared prompt-import pins remain independent.
+Central locks and validation CI use official gh-aw `v0.91.5`; the native MCP
+gateway remains `v0.4.29`, with no container-pin override.
 
 ## Credential setup
 
@@ -25,9 +27,10 @@ type `openai` (Ollama's OpenAI-compatible API). The configured model is
 network allowance. Keep provider configuration central and the incoming secret
 name neutral.
 
-Before running provider inference, rotate existing OpenCode key values to
-Ollama API keys in each caller's `TRIAGE_API_KEY` secret. Unchanged wiring does
-not provision credentials; OpenCode keys and OpenAI OAuth credentials do not
+Before running provider inference, ensure each caller's `TRIAGE_API_KEY` secret
+contains a valid Ollama API key, replacing keys from other providers as needed.
+Unchanged wiring does not provision credentials; OpenCode keys and OpenAI OAuth
+credentials do not
 authenticate to this Ollama endpoint. GitHub does not expose stored secret
 values for recovering an old `OLLAMA_API_KEY`; obtain a valid Ollama key instead.
 Never place key values in workflow files.

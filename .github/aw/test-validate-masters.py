@@ -35,6 +35,32 @@ RUNTIME_ISSUE_READ = f"{ESCAPED_QUOTE}github(issue_read){ESCAPED_QUOTE}"
 #: generated config copies, so a tamper cannot silently apply to the wrong place.
 CASES = [
     (
+        "compiled_setup_manifest_pin_mismatch",
+        [(".github/workflows/triage-issue.lock.yml",
+          '"repo":"github/gh-aw-actions/setup","sha":"16b430146d5d5646eccef5a1ceb72152333b18b9"',
+          '"repo":"github/gh-aw-actions/setup","sha":"a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93"')],
+        ("lock must pin the official gh-aw setup action for v0.91.5",),
+    ),
+    (
+        "compiled_runtime_setup_pin_mismatch",
+        [(".github/workflows/triage-pr.lock.yml",
+          "uses: github/gh-aw-actions/setup@16b430146d5d5646eccef5a1ceb72152333b18b9 # v0.91.5",
+          "uses: github/gh-aw-actions/setup@a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93 # v0.91.4", 6)],
+        ("lock runtime setup actions must use the official v0.91.5 SHA",),
+    ),
+    (
+        "actions_lock_setup_pin_mismatch",
+        [(".github/aw/actions-lock.json", "16b430146d5d5646eccef5a1ceb72152333b18b9",
+          "a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93")],
+        ("actions-lock must pin only the official gh-aw setup action for v0.91.5",),
+    ),
+    (
+        "ci_installed_version_guard_missing",
+        [(".github/workflows/validate-masters.yml",
+          '          test "$(gh aw --version)" = "gh aw version $GH_AW_VERSION"\n', "")],
+        ("validate-masters workflow must verify the installed compiler version",),
+    ),
+    (
         "compiled_wrong_proxy_target",
         [(".github/workflows/triage-issue.lock.yml",
           '"targets":{"copilot":{"host":"ollama.com"}}',
@@ -231,11 +257,11 @@ CASES = [
         [
             (
                 ".github/workflows/validate-masters.yml",
+                "  GH_AW_VERSION: v0.91.5\n",
                 "  GH_AW_VERSION: v0.91.4\n",
-                "  GH_AW_VERSION: v0.89.21\n",
             )
         ],
-        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.4",),
+        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.5",),
     ),
     (
         "compiled_gateway_pin_mismatch",
