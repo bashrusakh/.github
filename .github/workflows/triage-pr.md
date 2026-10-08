@@ -25,14 +25,14 @@ permissions:
   issues: read
 engine:
   id: copilot
-  model: mimo-v2.6-flash-free
+  model: glm-5.3-flash
   bare: true
   args: ["--deny-tool", "shell"]
   concurrency:
     group: "gh-aw-triage-${{ github.repository }}"
     queue: max
   env:
-    COPILOT_PROVIDER_BASE_URL: "https://opencode.ai/zen/v1"
+    COPILOT_PROVIDER_BASE_URL: "https://ollama.com/v1"
     COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
     COPILOT_PROVIDER_TYPE: openai
 models:
@@ -50,7 +50,7 @@ timeout-minutes: 20
 concurrency:
   job-discriminator: ${{ github.run_id }}
 network:
-  allowed: [defaults, github, opencode.ai]
+  allowed: [defaults, github, ollama.com]
 tools:
   bash: false
   cli-proxy: false

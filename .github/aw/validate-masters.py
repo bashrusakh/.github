@@ -61,7 +61,8 @@ SHARED_PIN = "e2de4a989077b7fdf558ef5656040dc2e547e674"
 SHARED_REPO = "bashrusakh/repo-docs-sync"
 SHARED_DIR = "packages/ghaw-triage/workflows"
 
-GH_AW_VERSION = "v0.91.4"
+GH_AW_VERSION = "v0.91.5"
+GH_AW_SETUP_SHA = "16b430146d5d5646eccef5a1ceb72152333b18b9"
 MCP_GATEWAY_IMAGE = "ghcr.io/github/gh-aw-mcpg:v0.4.29"
 MCP_GATEWAY_DIGEST = "sha256:ec08867ac8a4823e01efb2de2ba85a313199bb7ae666ef70ae58effc162a9bf3"
 
@@ -246,13 +247,16 @@ LABELS_REMOVE = {
 
 EXPECTED_ENGINE = {
     "id": "copilot",
-    "model": "mimo-v2.6-flash-free",
+    "model": "glm-5.3-flash",
     "bare": True,
     "args": ["--deny-tool", "shell"],
     "group": "gh-aw-triage-${{ github.repository }}",
     "queue": "max",
 }
-EXPECTED_NETWORK = ["defaults", "github", "opencode.ai"]
+EXPECTED_PROVIDER_BASE_URL = "https://ollama.com/v1"
+EXPECTED_PROVIDER_TYPE = "openai"
+EXPECTED_PROVIDER_HOST = "ollama.com"
+EXPECTED_NETWORK = ["defaults", "github", EXPECTED_PROVIDER_HOST]
 EXPECTED_MAX_TURNS = 20
 EXPECTED_TIMEOUT = 20
 
@@ -689,6 +693,14 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         == (True, "${{ secrets.TRIAGE_API_KEY }}"),
         f"{label} engine BYOK key must reference secrets.TRIAGE_API_KEY",
     )
+    for key, expected in (
+        ("COPILOT_PROVIDER_BASE_URL", EXPECTED_PROVIDER_BASE_URL),
+        ("COPILOT_PROVIDER_TYPE", EXPECTED_PROVIDER_TYPE),
+    ):
+        report.check(
+            dig(fm, f"engine.env.{key}") == (True, expected),
+            f"{label} engine {key} must be {expected!r}",
+        )
     # gh-aw derives workflow_call secrets from referenced secrets; source need not
     # duplicate the declaration. Check the generated interface and both BYOK jobs.
     lock_call = parse_frontmatter(
@@ -702,10 +714,29 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     for job in ("agent", "detection"):
         block = lock_job_block(lock_text, job) or ""
         report.check(
+            f'"targets":{{"copilot":{{"host":"{EXPECTED_PROVIDER_HOST}"}}}}'
+            in block.replace('\\"', '"'),
+            f"{label} lock {job} BYOK proxy must target {EXPECTED_PROVIDER_HOST}",
+        )
+        for key, expected in (
+            ("COPILOT_PROVIDER_BASE_URL", EXPECTED_PROVIDER_BASE_URL),
+            ("COPILOT_PROVIDER_TYPE", EXPECTED_PROVIDER_TYPE),
+            ("COPILOT_MODEL", EXPECTED_ENGINE["model"]),
+        ):
+            report.check(
+                re.findall(rf"(?m)^\s+{key}: (.+)$", block) == [expected],
+                f"{label} lock {job} {key} must be {expected!r}",
+            )
+        report.check(
             "COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}" in block,
             f"{label} lock {job} BYOK key must reference secrets.TRIAGE_API_KEY",
         )
     for text, surface in ((source_text, "source"), (lock_text, "lock")):
+        report.check(
+            all(marker not in text for marker in
+                ("opencode.ai", "mimo-v2.6-flash-free", "gpt-6-luna", "openai.com")),
+            f"{label} {surface} must not retain another provider endpoint or model",
+        )
         report.check(
             "OPENCODE_API_KEY" not in text and "OLLAMA_API_KEY" not in text,
             f"{label} {surface} must not retain provider-specific credential names",
@@ -1088,6 +1119,23 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         except json.JSONDecodeError as exc:
             report.fail(f"{label} lock gh-aw-manifest is not JSON: {exc}")
     if isinstance(manifest, dict):
+        setup_actions = [
+            action for action in manifest.get("actions", [])
+            if action.get("repo") == "github/gh-aw-actions/setup"
+        ]
+        report.check(
+            setup_actions == [{"repo": "github/gh-aw-actions/setup",
+                               "sha": GH_AW_SETUP_SHA, "version": GH_AW_VERSION}],
+            f"{label} lock must pin the official gh-aw setup action for {GH_AW_VERSION}",
+        )
+        setup_refs = re.findall(
+            r"(?m)^\s+uses: github/gh-aw-actions/setup@([^ ]+) # (.+)$", lock_text
+        )
+        report.check(
+            bool(setup_refs)
+            and all(ref == (GH_AW_SETUP_SHA, GH_AW_VERSION) for ref in setup_refs),
+            f"{label} lock runtime setup actions must use the official {GH_AW_VERSION} SHA",
+        )
         report.check(
             "TRIAGE_API_KEY" in manifest.get("secrets", []),
             f"{label} lock manifest must list TRIAGE_API_KEY",
@@ -1162,6 +1210,25 @@ def validate_shared(report: Report, root: Path) -> None:
         ci_text.count(f"GH_AW_VERSION: {GH_AW_VERSION}") == 1,
         f"validate-masters workflow must pin GH_AW_VERSION to {GH_AW_VERSION}",
     )
+    report.check(
+        'test "$(gh aw --version)" = "gh aw version $GH_AW_VERSION"' in ci_text,
+        "validate-masters workflow must verify the installed compiler version",
+    )
+    actions_lock_path = root / ".github" / "aw" / "actions-lock.json"
+    try:
+        actions_lock = json.loads(actions_lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        report.fail(f"cannot read compiler actions lock: {exc}")
+    else:
+        report.check(
+            actions_lock == {"entries": {
+                f"github/gh-aw-actions/setup@{GH_AW_VERSION}": {
+                    "repo": "github/gh-aw-actions/setup", "version": GH_AW_VERSION,
+                    "sha": GH_AW_SETUP_SHA,
+                }
+            }},
+            f"actions-lock must pin only the official gh-aw setup action for {GH_AW_VERSION}",
+        )
     import_dirs = sorted(
         p.name for p in (root / VENDOR_ROOT / SHARED_REPO).iterdir() if p.is_dir()
     ) if (root / VENDOR_ROOT / SHARED_REPO).is_dir() else []

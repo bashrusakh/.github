@@ -6,6 +6,8 @@ This intentionally trusts the central repository's `main`: later central model,
 endpoint, and workflow changes take effect without editing callers. Unlike an
 immutable revision, it does not freeze the reviewed workflow implementation.
 Compiler, action, container, and shared prompt-import pins remain independent.
+Central locks and validation CI use official gh-aw `v0.91.5`; the native MCP
+gateway remains `v0.4.29`, with no container-pin override.
 
 ## Credential setup
 
@@ -19,11 +21,24 @@ secrets:
   TRIAGE_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
 ```
 
-The masters consume it as `COPILOT_PROVIDER_API_KEY` for Copilot BYOK. The current
-model is `mimo-v2.6-flash-free` at `https://opencode.ai/zen/v1`. Keep provider
-configuration central and the incoming secret name neutral. Switching providers
-may still require rotating the key value; unchanged wiring does not provision
-credentials. Never place key values in workflow files.
+The masters consume it as `COPILOT_PROVIDER_API_KEY` for Copilot BYOK with provider
+type `openai` (Ollama's OpenAI-compatible API). The configured model is
+`glm-5.3-flash` at `https://ollama.com/v1`, with `ollama.com` as the provider
+network allowance. Keep provider configuration central and the incoming secret
+name neutral.
+
+Before running provider inference, ensure each caller's `TRIAGE_API_KEY` secret
+contains a valid Ollama API key, replacing keys from other providers as needed.
+Unchanged wiring does not provision credentials; OpenCode keys and OpenAI OAuth
+credentials do not
+authenticate to this Ollama endpoint. GitHub does not expose stored secret
+values for recovering an old `OLLAMA_API_KEY`; obtain a valid Ollama key instead.
+Never place key values in workflow files.
+
+Local validation and compilation do not verify authentication, model access,
+or available Ollama quota. The previous deployment encountered a weekly quota
+limit; restoring its configuration does not establish that quota is available
+now. No operational canary or successful provider inference is asserted here.
 
 Callers retain their own triggers, permissions, and `contract_files`. The
 metadata-only tool and label restrictions and trusted caller-policy resolution
