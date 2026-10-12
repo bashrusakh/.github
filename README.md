@@ -1,7 +1,9 @@
 # Reusable metadata triage
 
 Issue, PR, and backlog callers use
-`bashrusakh/.github/.github/workflows/triage-<kind>.lock.yml@main`.
+`bashrusakh/.github/.github/workflows/triage-<kind>.lock.yml@main`;
+title/body compliance callers use
+`bashrusakh/.github/.github/workflows/compliance.lock.yml@main`.
 This intentionally trusts the central repository's `main`: later central model,
 endpoint, and workflow changes take effect without editing callers. Unlike an
 immutable revision, it does not freeze the reviewed workflow implementation.
@@ -42,4 +44,6 @@ now. No operational canary or successful provider inference is asserted here.
 
 Callers retain their own triggers, permissions, and `contract_files`. The
 metadata-only tool and label restrictions and trusted caller-policy resolution
-are unchanged.
+are unchanged. The compliance master is comment-only: it reports through a
+single managed comment (plus `hide_comment` for the resolved state) and never
+labels, assigns, closes, or renames items.

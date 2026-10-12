@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic, no-LLM validator for the reusable triage masters in this repository.
+"""Deterministic, no-LLM validator for the reusable triage and compliance masters in this repository.
 
 Validates each master's source (``.github/workflows/<id>.md``) and generated
 (``.github/workflows/<id>.lock.yml``) artifact against the published capability contract of
@@ -12,8 +12,10 @@ the central triage deployment:
 * the GitHub MCP surface is exactly ``issues`` toolset, this repository, ``min-integrity: none``,
   and the narrow allowed tool list — no forbidden GitHub tool grant in either the manifest
   comment form or the shell-quoted runtime command form (see ``allow_tool_grants``);
-* the safe-output surface is exactly the label add/remove pair with the expected allow/block
-  lists and no comment tool;
+* the safe-output surface is mode-specific: the triage masters expose exactly the label
+  add/remove pair with the expected allow/block lists and no comment tool, while the
+  compliance master (``compliance``) exposes exactly one ``add_comment`` (+ ``hide_comment``)
+  pair — no labels, assignment, close, rename, or issue creation;
 * the masters carry no policy contract of their own: the ``contract_files`` default must name
   caller-owned files, never a file this repository ships.
 
@@ -79,16 +81,6 @@ EXPECTED_MANIFEST_SAFE_OUTPUTS = [
     "report_incomplete",
 ]
 
-#: The only GitHub MCP tools any master may expose to the agent.
-EXPECTED_GITHUB_TOOLS = ["issue_read", "search_issues"]
-
-#: The complete ``--allow-tool`` token set the compiled agent command may carry, in both the
-#: manifest comment block and the executed runtime command. ``safeoutputs`` is the safe-output
-#: MCP server, not a shell.
-EXPECTED_GRANT_TOKENS = sorted(
-    [f"github({name})" for name in EXPECTED_GITHUB_TOOLS] + ["safeoutputs"]
-)
-
 #: GitHub MCP tools that would expose file contents, patches, diffs or a PR search surface.
 #: None may appear as a grant (in an allow list, a toolset, or a lock ``--allow-tool``).
 FORBIDDEN_GITHUB_GRANTS = [
@@ -146,9 +138,17 @@ BUILTIN_SAFE_OUTPUTS = [
     "report_incomplete",
 ]
 
-#: The complete expected safe-output tool set of every master's compiled lock.
+#: The complete expected safe-output tool set of every label-mode master's compiled lock.
 EXPECTED_LOCK_SAFE_OUTPUTS = sorted(
     {"add_labels", "remove_labels"} | set(BUILTIN_SAFE_OUTPUTS)
+)
+
+#: The complete expected safe-output tool set of the comment-only compliance master, both in
+#: the lock's ``GH_AW_SAFE_OUTPUTS_CONFIG`` and in the compiled manifest order. The triage
+#: label surface (add_labels/remove_labels) is deliberately absent here: a compliance master
+#: may mutate an item only through one managed comment and hide-comment signals.
+COMMENT_SAFE_OUTPUTS = sorted(
+    {"add_comment", "hide_comment"} | set(BUILTIN_SAFE_OUTPUTS)
 )
 
 #: Consumer-repository contract files. This repository is a reusable-master host, so it must
@@ -160,7 +160,7 @@ CONSUMER_CONTRACT_FILES = ["triage-policy.md", "AGENTS.md", "CONTRIBUTING.md"]
 #: defaults are caller-owned names and not master-side artifacts.
 CALLER_CONTRACT_SUFFIXES = [".md", ".yml", ".yaml", ".toml", ".txt"]
 
-MASTER_IDS = ["triage-issue", "triage-pr", "triage-backlog"]
+MASTER_IDS = ["triage-issue", "triage-pr", "triage-backlog", "compliance"]
 
 #: Per-master expectations. ``imports`` is order-sensitive and exact.
 #:
@@ -170,7 +170,7 @@ MASTER_IDS = ["triage-issue", "triage-pr", "triage-backlog"]
 #: the shell cannot open the redirect target in a directory that does not exist yet, and the
 #: step then reports the file as missing and fails closed.
 #:
-#: All three masters assert this. ``triage-issue``'s ordering fix (``mkdir -p`` before the
+#: All masters assert this. ``triage-issue``'s ordering fix (``mkdir -p`` before the
 #: redirect) landed on ``main`` and is present in this branch's merge result, so the validator
 #: pins the corrected shape for it too rather than exempting it.
 MASTERS = {
@@ -229,6 +229,25 @@ MASTERS = {
             "Resolve repository policy contract at the trusted Policy SHA",
             "Resolve bounded backlog batch",
         ],
+        "policy_step_precreates_parent": True,
+    },
+    # The compliance master reviews one item's title/body and reports exclusively through a
+    # single managed comment (plus hide-comment for the resolved state): a comment-only
+    # surface, no labels, assignment, close or rename. Its prompt has no shared imports: the
+    # compliance contract core is the body of the source itself.
+    "compliance": {
+        "imports": [],
+        "permissions": {"contents": "read", "issues": "read"},
+        "contract_files": "AGENTS.md CONTRIBUTING.md",
+        "max_ai_credits": 8,
+        "max_turns": 24,
+        "github_allowed": [("issue_read", 8)],
+        "safe_outputs_mode": "comment",
+        "engine_group": "gh-aw-compliance-${{ github.repository }}-${{ inputs.item_number }}",
+        "add_comment_max": 1,
+        "hide_comment_max": 100,
+        "pre_agent_steps": ["Resolve trusted policy and item metadata"],
+        "policy_step_name": "Resolve trusted policy and item metadata",
         "policy_step_precreates_parent": True,
     },
 }
@@ -327,8 +346,11 @@ def _scalar(text: str):
         if text[0] == '"':
             try:
                 return json.loads(text)
-            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
-                raise ParseError(f"bad double-quoted scalar {text!r}: {exc}") from exc
+            except json.JSONDecodeError:
+                # Not JSON: a plain double-quoted YAML scalar. GitHub expressions such as
+                # "${{ inputs.item_number }}" are valid YAML that is not JSON; unquote them
+                # rather than rejecting a safe, typed construct.
+                return text[1:-1]
         return text[1:-1].replace("''", "'")
     # YAML core scalars: coerce so that typed comparisons are meaningful.
     lowered = text.lower()
@@ -565,6 +587,22 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     spec = MASTERS[master]
     label = f"[{master}]"
 
+    # Mode-specific expectations: label-mutating triage masters vs the comment-only
+    # compliance master. Label mode keeps the historical defaults.
+    mode = spec.get("safe_outputs_mode", "labels")
+    expected_engine_group = spec.get("engine_group", EXPECTED_ENGINE["group"])
+    expected_max_turns = spec.get("max_turns", EXPECTED_MAX_TURNS)
+    expected_github_tools = sorted(name for name, _ in spec["github_allowed"])
+    expected_grant_tokens = sorted(
+        [f"github({name})" for name in expected_github_tools] + ["safeoutputs"]
+    )
+    expected_manifest_safe_outputs = (
+        EXPECTED_MANIFEST_SAFE_OUTPUTS if mode == "labels" else COMMENT_SAFE_OUTPUTS
+    )
+    expected_lock_safe_outputs = (
+        EXPECTED_LOCK_SAFE_OUTPUTS if mode == "labels" else COMMENT_SAFE_OUTPUTS
+    )
+
     source_path = root / ".github" / "workflows" / f"{master}.md"
     lock_path = root / ".github" / "workflows" / f"{master}.lock.yml"
 
@@ -605,18 +643,27 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     )
 
     # ---- shared imports at the audited pin -----------------------------------------------
-    found, imports = dig(fm, "imports")
+    expected_imports = spec["imports"]
     report.check(
-        found and imports == spec["imports"],
-        f"{label} source imports must be exactly {spec['imports']}, got {imports}",
+        dig(fm, "inlined-imports") == (True, True), f"{label} must set inlined-imports: true"
     )
-    report.check(dig(fm, "inlined-imports") == (True, True), f"{label} must set inlined-imports: true")
-    if isinstance(imports, list):
-        for entry in imports:
+    if expected_imports:
+        found, imports = dig(fm, "imports")
+        report.check(
+            found and imports == expected_imports,
+            f"{label} source imports must be exactly {expected_imports}, got {imports}",
+        )
+        for entry in imports if isinstance(imports, list) else []:
             report.check(
                 isinstance(entry, str) and entry.endswith("@" + SHARED_PIN),
                 f"{label} import {entry!r} is not pinned to {SHARED_PIN}",
             )
+    else:
+        report.check(
+            dig(fm, "imports") == (False, None),
+            f"{label} must not declare imports: its prompt contract core is the body of "
+            "its own source",
+        )
 
     # ---- capability controls (source) -----------------------------------------------------
     report.check(dig(fm, "checkout") == (True, False), f"{label} must set checkout: false")
@@ -681,8 +728,8 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         f"{label} engine.args must be exactly {EXPECTED_ENGINE['args']}, got {engine_args}",
     )
     report.check(
-        dig(fm, "engine.concurrency.group") == (True, EXPECTED_ENGINE["group"]),
-        f"{label} engine.concurrency.group must be {EXPECTED_ENGINE['group']!r}",
+        dig(fm, "engine.concurrency.group") == (True, expected_engine_group),
+        f"{label} engine.concurrency.group must be {expected_engine_group!r}",
     )
     report.check(
         dig(fm, "engine.concurrency.queue") == (True, EXPECTED_ENGINE["queue"]),
@@ -711,6 +758,14 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         == (True, {"required": False}),
         f"{label} lock workflow_call must declare TRIAGE_API_KEY",
     )
+    if mode == "comment":
+        for name in ("item_number", "item_kind"):
+            found, block = dig(lock_call, f"on.workflow_call.inputs.{name}")
+            report.check(
+                found and isinstance(block, dict)
+                and block.get("required") is True and block.get("type") == "string",
+                f"{label} lock workflow_call must declare required string input {name!r}",
+            )
     for job in ("agent", "detection"):
         block = lock_job_block(lock_text, job) or ""
         report.check(
@@ -737,8 +792,12 @@ def validate_master(root: Path, master: str, report: Report) -> None:
                 ("opencode.ai", "mimo-v2.6-flash-free", "gpt-6-luna", "openai.com")),
             f"{label} {surface} must not retain another provider endpoint or model",
         )
+        # A compliance body legitimately *names* OPENCODE_API_KEY in its prohibition
+        # prose; a credential leak is a declaration (env key) or a secrets reference.
+        # Scan those forms, not the bare token.
         report.check(
-            "OPENCODE_API_KEY" not in text and "OLLAMA_API_KEY" not in text,
+            re.search(r"secrets\.(?:OPENCODE|OLLAMA)_API_KEY", text) is None
+            and re.search(r"(?m)^\s*(?:OPENCODE|OLLAMA)_API_KEY:\s", text) is None,
             f"{label} {surface} must not retain provider-specific credential names",
         )
 
@@ -748,8 +807,8 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         f"{label} max-ai-credits must be {spec['max_ai_credits']}",
     )
     report.check(
-        dig(fm, "max-turns") == (True, EXPECTED_MAX_TURNS),
-        f"{label} max-turns must be {EXPECTED_MAX_TURNS}",
+        dig(fm, "max-turns") == (True, expected_max_turns),
+        f"{label} max-turns must be {expected_max_turns}",
     )
     report.check(
         dig(fm, "timeout-minutes") == (True, EXPECTED_TIMEOUT),
@@ -787,50 +846,105 @@ def validate_master(root: Path, master: str, report: Report) -> None:
             f"{label} safe-outputs.{signal}.create-issue must be false",
         )
     found, safe_outputs = dig(fm, "safe-outputs")
-    if isinstance(safe_outputs, dict):
-        for forbidden in ("add-comment", "add_comment", "create-issue", "create-pull-request"):
+    if mode == "labels":
+        if isinstance(safe_outputs, dict):
+            for forbidden in ("add-comment", "add_comment", "create-issue", "create-pull-request"):
+                report.check(
+                    forbidden not in safe_outputs,
+                    f"{label} safe-outputs must not declare {forbidden!r}",
+                )
+
+        add_max, add_issue_intent = spec["add_labels"]
+        max_labels_per_add = spec["max_labels_per_add"]
+        remove_max, _ = spec["remove_labels"]
+        report.check(
+            dig(fm, "safe-outputs.add-labels.max-labels") == (True, max_labels_per_add),
+            f"{label} safe-outputs.add-labels.max-labels must be {max_labels_per_add}",
+        )
+
+        for key, expected_labels, expected_max in (
+            ("add-labels", LABELS_ADD[master], add_max),
+            ("remove-labels", LABELS_REMOVE[master], remove_max),
+        ):
+            found, block = dig(fm, f"safe-outputs.{key}")
+            if not report.check(found and isinstance(block, dict), f"{label} safe-outputs.{key} missing"):
+                continue
             report.check(
-                forbidden not in safe_outputs,
-                f"{label} safe-outputs must not declare {forbidden!r}",
+                block.get("allowed") == expected_labels,
+                f"{label} safe-outputs.{key}.allowed must be {expected_labels}, got {block.get('allowed')}",
             )
+            report.check(
+                block.get("blocked") == EXPECTED_BLOCKED,
+                f"{label} safe-outputs.{key}.blocked must be exactly the {len(EXPECTED_BLOCKED)} required patterns, got {block.get('blocked')}",
+            )
+            report.check(
+                block.get("max") == expected_max,
+                f"{label} safe-outputs.{key}.max must be {expected_max}, got {block.get('max')}",
+            )
+        report.check(
+            dig(fm, "safe-outputs.add-labels.issue-intent") == (True, add_issue_intent),
+            f"{label} safe-outputs.add-labels.issue-intent must be {add_issue_intent}",
+        )
+        found, remove_block = dig(fm, "safe-outputs.remove-labels")
+        if isinstance(remove_block, dict):
+            report.check(
+                "issue-intent" not in remove_block,
+                f"{label} safe-outputs.remove-labels must not declare issue-intent",
+            )
+    else:
+        # Comment-only surface: the findings channel is exactly one managed comment plus the
+        # hide-comment resolved signal; labels/assignment/close/rename/issue creation must
+        # never be declared.
+        report.check(
+            isinstance(safe_outputs, dict),
+            f"{label} source safe-outputs must be a mapping",
+        )
+        for forbidden in ("add-labels", "remove-labels", "create-issue", "create-pull-request"):
+            report.check(
+                (not isinstance(safe_outputs, dict)) or forbidden not in safe_outputs,
+                f"{label} comment-only master must not declare safe-outputs.{forbidden!r}",
+            )
+        report.check(
+            dig(fm, "safe-outputs.add-comment.max") == (True, spec["add_comment_max"]),
+            f"{label} safe-outputs add-comment max must be {spec['add_comment_max']}",
+        )
+        report.check(
+            dig(fm, "safe-outputs.add-comment.target") == (True, "${{ inputs.item_number }}"),
+            f"{label} safe-outputs add-comment target must be ${{{{ inputs.item_number }}}}",
+        )
+        report.check(
+            dig(fm, "safe-outputs.add-comment.hide-older-comments") == (True, True),
+            f"{label} safe-outputs add-comment hide-older-comments must be true",
+        )
+        report.check(
+            dig(fm, "safe-outputs.add-comment.allowed-reasons") == (True, ["outdated", "resolved"]),
+            f"{label} safe-outputs add-comment allowed-reasons must be ['outdated', 'resolved']",
+        )
+        report.check(
+            dig(fm, "safe-outputs.add-comment.footer") == (True, False),
+            f"{label} safe-outputs add-comment footer must be false",
+        )
+        report.check(
+            dig(fm, "safe-outputs.hide-comment.max") == (True, spec["hide_comment_max"]),
+            f"{label} safe-outputs hide-comment max must be {spec['hide_comment_max']}",
+        )
+        report.check(
+            dig(fm, "safe-outputs.hide-comment.allowed-reasons") == (True, ["resolved"]),
+            f"{label} safe-outputs hide-comment allowed-reasons must be ['resolved']",
+        )
 
-    add_max, add_issue_intent = spec["add_labels"]
-    max_labels_per_add = spec["max_labels_per_add"]
-    remove_max, _ = spec["remove_labels"]
-    report.check(
-        dig(fm, "safe-outputs.add-labels.max-labels") == (True, max_labels_per_add),
-        f"{label} safe-outputs.add-labels.max-labels must be {max_labels_per_add}",
-    )
-
-    for key, expected_labels, expected_max in (
-        ("add-labels", LABELS_ADD[master], add_max),
-        ("remove-labels", LABELS_REMOVE[master], remove_max),
-    ):
-        found, block = dig(fm, f"safe-outputs.{key}")
-        if not report.check(found and isinstance(block, dict), f"{label} safe-outputs.{key} missing"):
-            continue
-        report.check(
-            block.get("allowed") == expected_labels,
-            f"{label} safe-outputs.{key}.allowed must be {expected_labels}, got {block.get('allowed')}",
-        )
-        report.check(
-            block.get("blocked") == EXPECTED_BLOCKED,
-            f"{label} safe-outputs.{key}.blocked must be exactly the {len(EXPECTED_BLOCKED)} required patterns, got {block.get('blocked')}",
-        )
-        report.check(
-            block.get("max") == expected_max,
-            f"{label} safe-outputs.{key}.max must be {expected_max}, got {block.get('max')}",
-        )
-    report.check(
-        dig(fm, "safe-outputs.add-labels.issue-intent") == (True, add_issue_intent),
-        f"{label} safe-outputs.add-labels.issue-intent must be {add_issue_intent}",
-    )
-    found, remove_block = dig(fm, "safe-outputs.remove-labels")
-    if isinstance(remove_block, dict):
-        report.check(
-            "issue-intent" not in remove_block,
-            f"{label} safe-outputs.remove-labels must not declare issue-intent",
-        )
+    # ---- declared reusable inputs --------------------------------------------------------
+    if mode == "comment":
+        # The caller supplies the reviewed item; both inputs are required strings. The
+        # item_kind domain (issue|pull_request) is enforced by the pre-agent step, checked on
+        # both the source and the compiled policy below.
+        for name in ("item_number", "item_kind"):
+            found, block = dig(fm, f"on.workflow_call.inputs.{name}")
+            report.check(
+                found and isinstance(block, dict)
+                and block.get("required") is True and block.get("type") == "string",
+                f"{label} on.workflow_call.inputs must declare required string input {name!r}, got {block}",
+            )
 
     # ---- pre-agent steps -----------------------------------------------------------------
     found, steps = dig(fm, "pre-agent-steps")
@@ -891,7 +1005,10 @@ def validate_master(root: Path, master: str, report: Report) -> None:
                     s
                     for s in (raw_steps if isinstance(raw_steps, list) else [])
                     if isinstance(s, dict)
-                    and s.get("name") == "Resolve repository policy contract at the trusted Policy SHA"
+                    and s.get("name") == spec.get(
+                        "policy_step_name",
+                        "Resolve repository policy contract at the trusted Policy SHA",
+                    )
                 ),
                 None,
             )
@@ -966,13 +1083,13 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     comment_tokens = sorted(t for form, t in allow_tool_grants(lock_text) if form == "comment")
     runtime_tokens = sorted(t for form, t in allow_tool_grants(lock_text) if form == "runtime")
     report.check(
-        comment_tokens == EXPECTED_GRANT_TOKENS,
-        f"{label} lock manifest comment --allow-tool tokens must be {EXPECTED_GRANT_TOKENS}, "
+        comment_tokens == expected_grant_tokens,
+        f"{label} lock manifest comment --allow-tool tokens must be {expected_grant_tokens}, "
         f"got {comment_tokens}",
     )
     report.check(
-        runtime_tokens == EXPECTED_GRANT_TOKENS,
-        f"{label} lock runtime command --allow-tool tokens must be {EXPECTED_GRANT_TOKENS}, "
+        runtime_tokens == expected_grant_tokens,
+        f"{label} lock runtime command --allow-tool tokens must be {expected_grant_tokens}, "
         f"got {runtime_tokens}",
     )
     for offender in runtime_shell_grants(lock_text):
@@ -985,8 +1102,8 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     tool_grants = sorted(n for n in grants if not n.startswith("toolset:"))
     toolset_grants = sorted(n for n in grants if n.startswith("toolset:"))
     report.check(
-        tool_grants == sorted(EXPECTED_GITHUB_TOOLS),
-        f"{label} lock GitHub MCP grants must be exactly {sorted(EXPECTED_GITHUB_TOOLS)}, got {tool_grants}",
+        tool_grants == sorted(expected_github_tools),
+        f"{label} lock GitHub MCP grants must be exactly {sorted(expected_github_tools)}, got {tool_grants}",
     )
     report.check(
         toolset_grants == ["toolset:issues"],
@@ -1012,12 +1129,33 @@ def validate_master(root: Path, master: str, report: Report) -> None:
     )
 
     # ---- generated lock: silence ---------------------------------------------------------
-    for marker in ("add_comment", "add-comment", "add_workflow_run_comment", "comment_on_issue"):
-        report.check(marker not in lock_text, f"{label} lock must not contain {marker!r}")
     report.check(
-        lock_text.count('comment_id: ""') == 1 and lock_text.count("comment_url:") == 0,
-        f"{label} lock must not wire a status comment (status-comment: false)",
+        lock_text.count('comment_id: ""') == 1,
+        f"{label} lock must wire exactly one hardcoded-empty comment_id output",
     )
+    if mode == "labels":
+        for marker in ("add_comment", "add-comment", "add_workflow_run_comment", "comment_on_issue"):
+            report.check(marker not in lock_text, f"{label} lock must not contain {marker!r}")
+        report.check(
+            lock_text.count("comment_url:") == 0,
+            f"{label} lock must not wire a status comment (status-comment: false)",
+        )
+    else:
+        # Comment-only surface: the compiled config must expose only the managed
+        # add_comment/hide_comment pair — never label mutation, run comments, or item
+        # writes. The single workflow output pair flows through the safe_outputs job.
+        for marker in (
+            "add_labels", "remove_labels", "add_workflow_run_comment", "comment_on_issue",
+        ):
+            report.check(
+                marker not in lock_text,
+                f"{label} comment-only lock must not expose {marker!r}",
+            )
+        report.check(
+            'comment_id: ${{ steps.process_safe_outputs.outputs.comment_id }}' in lock_text
+            and 'comment_url: ${{ steps.process_safe_outputs.outputs.comment_url }}' in lock_text,
+            f"{label} lock must wire the comment outputs through the safe_outputs job",
+        )
     report.check(
         'GH_AW_FAILURE_REPORT_AS_ISSUE: "false"' in lock_text
         and 'GH_AW_FAILURE_REPORT_AS_ISSUE: "true"' not in lock_text,
@@ -1051,64 +1189,104 @@ def validate_master(root: Path, master: str, report: Report) -> None:
                 f"{label} lock safe-outputs config must be a JSON object",
             )
         if isinstance(config, dict):
-            for forbidden in FORBIDDEN_SAFE_OUTPUTS:
+            forbidden_now = [
+                f for f in FORBIDDEN_SAFE_OUTPUTS
+                if not (mode == "comment" and f in ("add_comment", "add-comment"))
+            ]
+            for forbidden in forbidden_now:
                 report.check(
                     forbidden not in config,
                     f"{label} lock safe-outputs must not expose {forbidden!r}",
                 )
-            expected_keys = {"add_labels", "remove_labels"} | set(BUILTIN_SAFE_OUTPUTS)
-            missing = sorted(expected_keys - set(config))
-            unexpected = sorted(set(config) - expected_keys)
+            reported_keys = set(config) - set(forbidden_now)
+            unexpected = sorted(
+                reported_keys
+                - (({"add_labels", "remove_labels"} if mode == "labels" else {"add_comment", "hide_comment"}) | set(BUILTIN_SAFE_OUTPUTS))
+            )
+            missing = sorted(
+                ((({"add_labels", "remove_labels"} if mode == "labels" else {"add_comment", "hide_comment"}) | set(BUILTIN_SAFE_OUTPUTS)))
+                - reported_keys
+            )
             report.check(
                 not missing,
                 f"{label} lock safe-outputs are missing expected tools {missing}",
             )
             report.check(
-                sorted(config) == EXPECTED_LOCK_SAFE_OUTPUTS,
-                f"{label} lock safe-outputs must be exactly {EXPECTED_LOCK_SAFE_OUTPUTS}, got {sorted(config)}",
+                sorted(config) == expected_lock_safe_outputs,
+                f"{label} lock safe-outputs must be exactly {expected_lock_safe_outputs}, got {sorted(config)}",
             )
             report.check(
                 not unexpected,
                 f"{label} lock safe-outputs expose unexpected tools {unexpected}",
             )
-            for key in ("add_labels", "remove_labels"):
-                report.check(key in config, f"{label} lock safe-outputs missing {key!r}")
-                block = config.get(key)
-                if isinstance(block, dict):
+            if mode == "labels":
+                add_max, _ = spec["add_labels"]
+                max_labels_per_add = spec["max_labels_per_add"]
+                remove_max, _ = spec["remove_labels"]
+                for key in ("add_labels", "remove_labels"):
+                    report.check(key in config, f"{label} lock safe-outputs missing {key!r}")
+                    block = config.get(key)
+                    if isinstance(block, dict):
+                        report.check(
+                            block.get("blocked") == EXPECTED_BLOCKED,
+                            f"{label} lock {key}.blocked must be exactly the required patterns, got {block.get('blocked')}",
+                        )
+                        report.check(
+                            block.get("max") == (add_max if key == "add_labels" else remove_max),
+                            f"{label} lock {key}.max must be {add_max if key == 'add_labels' else remove_max}",
+                        )
+                add_block = config.get("add_labels")
+                if isinstance(add_block, dict):
                     report.check(
-                        block.get("blocked") == EXPECTED_BLOCKED,
-                        f"{label} lock {key}.blocked must be exactly the required patterns, got {block.get('blocked')}",
+                        add_block.get("max_labels") == max_labels_per_add,
+                        f"{label} lock add_labels.max_labels must be {max_labels_per_add}, "
+                        f"got {add_block.get('max_labels')}",
                     )
                     report.check(
-                        block.get("max") == (add_max if key == "add_labels" else remove_max),
-                        f"{label} lock {key}.max must be {add_max if key == 'add_labels' else remove_max}",
+                        add_block.get("issue_intent") is False,
+                        f"{label} lock add_labels.issue_intent must be false",
+                    )
+                    report.check(
+                        add_block.get("allowed") == LABELS_ADD[master],
+                        f"{label} lock add_labels.allowed must be {LABELS_ADD[master]}, got {add_block.get('allowed')}",
+                    )
+                remove_block_lock = config.get("remove_labels")
+                if isinstance(remove_block_lock, dict):
+                    report.check(
+                        remove_block_lock.get("allowed") == LABELS_REMOVE[master],
+                        f"{label} lock remove_labels.allowed must be {LABELS_REMOVE[master]}, got {remove_block_lock.get('allowed')}",
+                    )
+            else:
+                comment_block = config.get("add_comment")
+                if report.check(
+                    isinstance(comment_block, dict),
+                    f"{label} lock safe-outputs must carry a managed add_comment config",
+                ):
+                    report.check(
+                        comment_block.get("max") == 1
+                        and comment_block.get("footer") is False
+                        and comment_block.get("hide_older_comments") is True
+                        and comment_block.get("target") == "${GH_AW_INPUT_ITEM_NUMBER}",
+                        f"{label} lock add_comment must be max=1, footer=false, "
+                        "hide_older_comments=true, target=${GH_AW_INPUT_ITEM_NUMBER}, "
+                        f"got {comment_block}",
+                    )
+                hide_block = config.get("hide_comment")
+                if report.check(
+                    isinstance(hide_block, dict),
+                    f"{label} lock safe-outputs must carry a managed hide_comment config",
+                ):
+                    report.check(
+                        hide_block.get("max") == spec["hide_comment_max"]
+                        and hide_block.get("allowed_reasons") == ["resolved"],
+                        f"{label} lock hide_comment must be max={spec['hide_comment_max']} "
+                        f"with allowed_reasons=['resolved'], got {hide_block}",
                     )
             noop = config.get("noop")
             if isinstance(noop, dict):
                 report.check(
                     noop.get("max") == 1 and noop.get("report-as-issue") == "false",
                     f"{label} lock noop must preserve max=1 and report-as-issue=false",
-                )
-            add_block = config.get("add_labels")
-            if isinstance(add_block, dict):
-                report.check(
-                    add_block.get("max_labels") == max_labels_per_add,
-                    f"{label} lock add_labels.max_labels must be {max_labels_per_add}, "
-                    f"got {add_block.get('max_labels')}",
-                )
-                report.check(
-                    add_block.get("issue_intent") is False,
-                    f"{label} lock add_labels.issue_intent must be false",
-                )
-                report.check(
-                    add_block.get("allowed") == LABELS_ADD[master],
-                    f"{label} lock add_labels.allowed must be {LABELS_ADD[master]}, got {add_block.get('allowed')}",
-                )
-            remove_block_lock = config.get("remove_labels")
-            if isinstance(remove_block_lock, dict):
-                report.check(
-                    remove_block_lock.get("allowed") == LABELS_REMOVE[master],
-                    f"{label} lock remove_labels.allowed must be {LABELS_REMOVE[master]}, got {remove_block_lock.get('allowed')}",
                 )
 
     manifest = None
@@ -1154,12 +1332,12 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         )
         servers = {server.get("name"): server.get("tools") for server in manifest.get("mcp_servers", [])}
         report.check(
-            servers.get("github") == EXPECTED_GITHUB_TOOLS,
-            f"{label} lock manifest github tools must be {EXPECTED_GITHUB_TOOLS}, got {servers.get('github')}",
+            servers.get("github") == expected_github_tools,
+            f"{label} lock manifest github tools must be {expected_github_tools}, got {servers.get('github')}",
         )
         report.check(
-            servers.get("safeoutputs") == EXPECTED_MANIFEST_SAFE_OUTPUTS,
-            f"{label} lock manifest safeoutputs tools must be {EXPECTED_MANIFEST_SAFE_OUTPUTS}, got {servers.get('safeoutputs')}",
+            servers.get("safeoutputs") == expected_manifest_safe_outputs,
+            f"{label} lock manifest safeoutputs tools must be {expected_manifest_safe_outputs}, got {servers.get('safeoutputs')}",
         )
     report.check(
         f'"compiler_version":"{GH_AW_VERSION}"' in lock_text
@@ -1174,6 +1352,34 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         report.check(
             f'"{writer}"' not in lock_text,
             f"{label} lock must not configure diagnostic issue writer {writer!r}",
+        )
+
+    # ---- compliance master: caller inputs enforced fail-closed by the compiled policy ----
+    # The reusable interface accepts item_number/item_kind from any caller; the compiled
+    # pre-agent step must reject anything that is not a decimal item number and an exact
+    # issue|pull_request kind, and must bind the fetch to the declared kind.
+    if mode == "comment":
+        report.check(
+            lock_text.count(
+                '*) echo \\"::error::item_kind must be issue or pull_request\\"; exit 1 ;;'
+            ) == 1,
+            f"{label} lock pre-agent step must fail closed on item_kind values other than "
+            "issue|pull_request (compiled case statement missing)",
+        )
+        report.check(
+            lock_text.count(
+                "::error::item_number must be a decimal GitHub item number"
+            ) == 1,
+            f"{label} lock pre-agent step must fail closed on non-decimal item_number inputs",
+        )
+        report.check(
+            "repos/$GITHUB_REPO/issues/$ITEM_NUMBER" in lock_text
+            and "repos/$GITHUB_REPO/pulls/$ITEM_NUMBER" in lock_text,
+            f"{label} lock pre-agent step must fetch the caller item by its declared kind",
+        )
+        report.check(
+            "<!-- gh-aw-compliance -->" in lock_text,
+            f"{label} lock prompt must keep the gh-aw-compliance comment marker",
         )
 
     # ---- generated lock: imports must be inlined, not deferred --------------------------
@@ -1257,7 +1463,7 @@ def validate_shared(report: Report, root: Path) -> None:
     used = {entry for spec in MASTERS.values() for entry in spec["imports"]}
     report.check(
         len(used) == 4,
-        f"the three masters must share exactly 4 pinned components, got {len(used)}",
+        f"the masters must share exactly 4 pinned components, got {len(used)}",
     )
 
 
