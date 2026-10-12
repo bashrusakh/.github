@@ -386,6 +386,95 @@ CASES = [
         ],
         ("must create $dir/<dirname(f)> BEFORE",),
     ),
+    # ---------------------------------------------------------------- compliance master ----
+    (
+        "compliance_label_safe_output_added_to_lock",
+        # The comment-only master's compiled config must never regain label mutation.
+        [
+            (
+                ".github/workflows/compliance.lock.yml",
+                'GH_AW_SAFE_OUTPUTS_CONFIG: "{\\"add_comment\\"',
+                'GH_AW_SAFE_OUTPUTS_CONFIG: "{\\"add_labels\\":{},\\"add_comment\\"',
+            )
+        ],
+        ("lock safe-outputs expose unexpected tools ['add_labels']",),
+    ),
+    (
+        "compliance_issue_write_tool_granted_runtime",
+        # The github MCP runtime grant set must stay exactly github(issue_read); adding a
+        # write tool even in the executable command must fail (both grant forms are parsed).
+        [
+            (
+                ".github/workflows/compliance.lock.yml",
+                RUNTIME_ISSUE_READ,
+                f"{ESCAPED_QUOTE}github(add_issue_comment){ESCAPED_QUOTE}",
+            )
+        ],
+        (
+            "lock GitHub MCP grants must be exactly ['issue_read']",
+            "lock runtime command --allow-tool tokens must be",
+        ),
+    ),
+    (
+        "compliance_workflow_dispatch_trigger_added",
+        # A reusable master must stay callable-only: no workflow_dispatch / push / schedule.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "  status-comment: false\npermissions:",
+                "  status-comment: false\n  workflow_dispatch: true\npermissions:",
+            )
+        ],
+        ("source 'on:' carries unexpected trigger keys ['workflow_dispatch']",),
+    ),
+    (
+        "compliance_byok_env_key_missing",
+        # Dropping the neutral TRIAGE_API_KEY engine env breaks the BYOK contract.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "    COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}\n",
+                "",
+            )
+        ],
+        ("engine BYOK key must reference secrets.TRIAGE_API_KEY",),
+    ),
+    (
+        "compliance_item_kind_input_renamed",
+        # Renaming the declared reusable input must fail: item_number/item_kind are required.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "      item_kind:\n",
+                "      item_type:\n",
+            )
+        ],
+        ("on.workflow_call.inputs must declare required string input 'item_kind'",),
+    ),
+    (
+        "compliance_bash_tool_enabled",
+        # The agent must never get the bash tool back once the master ships deny-shell.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "  bash: false",
+                "  bash: true",
+            )
+        ],
+        ("must set tools.bash: false",),
+    ),
+    (
+        "compliance_add_comment_limit_widened",
+        # The single managed comment is the whole write surface; widening max must fail.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "  add-comment:\n    max: 1\n",
+                "  add-comment:\n    max: 10\n",
+            )
+        ],
+        ("safe-outputs add-comment max must be 1",),
+    ),
 ]
 
 
