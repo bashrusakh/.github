@@ -67,10 +67,10 @@ SHARED_PIN = "e2de4a989077b7fdf558ef5656040dc2e547e674"
 SHARED_REPO = "bashrusakh/repo-docs-sync"
 SHARED_DIR = "packages/ghaw-triage/workflows"
 
-GH_AW_VERSION = "v0.91.5"
-GH_AW_SETUP_SHA = "16b430146d5d5646eccef5a1ceb72152333b18b9"
-MCP_GATEWAY_IMAGE = "ghcr.io/github/gh-aw-mcpg:v0.4.29"
-MCP_GATEWAY_DIGEST = "sha256:ec08867ac8a4823e01efb2de2ba85a313199bb7ae666ef70ae58effc162a9bf3"
+GH_AW_VERSION = "v0.91.10"
+GH_AW_SETUP_SHA = "78463f0415a31d43de923053fe94453066fc67d9"
+MCP_GATEWAY_IMAGE = "ghcr.io/github/gh-aw-mcpg:v0.4.30"
+MCP_GATEWAY_DIGEST = "sha256:ab5a436a1490438db473e4e3d4c973cb1d75e3cb233fb08b73d31b42d7d18fba"
 
 #: Vendored import cache location, mirroring gh-aw's own layout.
 VENDOR_ROOT = ".github/aw/imports"
@@ -276,7 +276,7 @@ EXPECTED_ENGINE = {
     "group": "gh-aw-triage-${{ github.repository }}",
     "queue": "max",
 }
-# gh-aw v0.91.5's Model Alias Format grammar (V-MAF-001/V-MAF-006) forbids ':'
+# gh-aw v0.91.10's Model Alias Format grammar (V-MAF-001/V-MAF-006) forbids ':'
 # inside a literal engine.model identifier, and the Ollama Cloud model id
 # ("gpt-oss:120b") requires it. The masters therefore declare the model as a
 # constant GitHub Actions expression; the locks emit the same expression and
