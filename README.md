@@ -25,7 +25,7 @@ secrets:
 
 The masters consume it as `COPILOT_PROVIDER_API_KEY` for Copilot BYOK with provider
 type `openai` (Ollama's OpenAI-compatible API). The configured model is
-`glm-5.3-flash` at `https://ollama.com/v1`, with `ollama.com` as the provider
+`gpt-oss:120b` at `https://ollama.com/v1`, with `ollama.com` as the provider
 network allowance. Keep provider configuration central and the incoming secret
 name neutral.
 
