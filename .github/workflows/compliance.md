@@ -30,6 +30,8 @@ engine:
     group: "gh-aw-compliance-${{ github.repository }}-${{ inputs.item_number }}"
     queue: max
   env:
+    COMPLIANCE_ITEM_NUMBER: ${{ inputs.item_number }}
+    COMPLIANCE_ITEM_KIND: ${{ inputs.item_kind }}
     COPILOT_PROVIDER_BASE_URL: "https://ollama.com/v1"
     COPILOT_PROVIDER_API_KEY: ${{ secrets.TRIAGE_API_KEY }}
     COPILOT_PROVIDER_TYPE: openai
@@ -169,6 +171,15 @@ The pre-agent step fetches only caller-owned policy/templates from the trusted i
 branch or the pull request's captured base commit. It never uses the PR head as policy, checks out a repository,
 or executes source or diff content. Missing files are recorded as neutral evidence, not treated
 as an author violation. The caller should pass applicable templates in `contract_files`.
+
+This run evaluates exactly one item: **${{ inputs.item_kind }} #${{ inputs.item_number }}**; the
+same caller-supplied values are also exported as the `COMPLIANCE_ITEM_NUMBER` and
+`COMPLIANCE_ITEM_KIND` environment variables of this run. The trusted pre-agent step has already
+pre-fetched this item with its comment list, the trusted `policy_sha`, and the `contract_files`
+list into read-only `.policy/item.json`, plus the authoritative policy and template files
+themselves under `.policy/<POLICY_SHA>/` (by default `.policy/<POLICY_SHA>/AGENTS.md`,
+`.policy/<POLICY_SHA>/CONTRIBUTING.md`, and `.policy/<POLICY_SHA>/missing-contract-files.txt`):
+read `.policy/item.json` first and resolve `<POLICY_SHA>` from the `policy_sha` it records.
 
 ## Contract and findings
 
