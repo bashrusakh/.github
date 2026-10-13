@@ -266,12 +266,21 @@ LABELS_REMOVE = {
 
 EXPECTED_ENGINE = {
     "id": "copilot",
-    "model": "glm-5.3-flash",
+    "model": "gpt-oss:120b",
     "bare": True,
     "args": ["--deny-tool", "shell"],
     "group": "gh-aw-triage-${{ github.repository }}",
     "queue": "max",
 }
+# gh-aw v0.91.5's Model Alias Format grammar (V-MAF-001/V-MAF-006) forbids ':'
+# inside a literal engine.model identifier, and the Ollama Cloud model id
+# ("gpt-oss:120b") requires it. The masters therefore declare the model as a
+# constant GitHub Actions expression; the locks emit the same expression and
+# GitHub evaluates it to the canonical model string at runtime. This constant is
+# the byte-exact frontmatter/lock field form; EXPECTED_ENGINE["model"] stays the
+# canonical runtime model both forms must resolve to.
+EXPECTED_MODEL_FIELD = f"${{{{ '{EXPECTED_ENGINE['model']}' }}}}"
+assert EXPECTED_MODEL_FIELD == "${{ 'gpt-oss:120b' }}"
 EXPECTED_PROVIDER_BASE_URL = "https://ollama.com/v1"
 EXPECTED_PROVIDER_TYPE = "openai"
 EXPECTED_PROVIDER_HOST = "ollama.com"
@@ -715,8 +724,8 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         f"{label} engine.id must be {EXPECTED_ENGINE['id']!r}",
     )
     report.check(
-        dig(fm, "engine.model") == (True, EXPECTED_ENGINE["model"]),
-        f"{label} engine.model must be {EXPECTED_ENGINE['model']!r}",
+        dig(fm, "engine.model") == (True, EXPECTED_MODEL_FIELD),
+        f"{label} engine.model must be {EXPECTED_MODEL_FIELD!r}",
     )
     report.check(
         dig(fm, "engine.bare") == (True, EXPECTED_ENGINE["bare"]),
@@ -776,7 +785,7 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         for key, expected in (
             ("COPILOT_PROVIDER_BASE_URL", EXPECTED_PROVIDER_BASE_URL),
             ("COPILOT_PROVIDER_TYPE", EXPECTED_PROVIDER_TYPE),
-            ("COPILOT_MODEL", EXPECTED_ENGINE["model"]),
+            ("COPILOT_MODEL", EXPECTED_MODEL_FIELD),
         ):
             report.check(
                 re.findall(rf"(?m)^\s+{key}: (.+)$", block) == [expected],

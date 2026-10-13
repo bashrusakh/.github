@@ -69,9 +69,10 @@ CASES = [
     ),
     (
         "source_old_model_retained",
-        [(".github/workflows/triage-issue.md", "model: glm-5.3-flash",
-          "model: mimo-v2.6-flash-free")],
-        ("engine.model must be 'glm-5.3-flash'",),
+        [(".github/workflows/triage-issue.md",
+          "model: ${{ 'gpt-oss:120b' }}",
+          "model: ${{ 'mimo-v2.6-flash-free' }}")],
+        ('engine.model must be "${{ \'gpt-oss:120b\' }}"',),
     ),
     (
         "source_old_endpoint_retained",
@@ -101,9 +102,11 @@ CASES = [
     ),
     (
         "compiled_old_model_retained",
-        [(".github/workflows/triage-backlog.lock.yml", "COPILOT_MODEL: glm-5.3-flash",
-          "COPILOT_MODEL: mimo-v2.6-flash-free", 2)],
-        ("lock agent COPILOT_MODEL must be", "lock detection COPILOT_MODEL must be"),
+        [(".github/workflows/triage-backlog.lock.yml",
+          "COPILOT_MODEL: ${{ 'gpt-oss:120b' }}",
+          "COPILOT_MODEL: ${{ 'mimo-v2.6-flash-free' }}", 2)],
+        ('lock agent COPILOT_MODEL must be "${{ \'gpt-oss:120b\' }}"',
+         'lock detection COPILOT_MODEL must be "${{ \'gpt-oss:120b\' }}"'),
     ),
     (
         "compiled_wrong_provider_type",
@@ -114,9 +117,10 @@ CASES = [
     ),
     (
         "unpublished_luna_model_reintroduced",
-        [(".github/workflows/triage-pr.md", "model: glm-5.3-flash",
+        [(".github/workflows/triage-pr.md",
+          "model: ${{ 'gpt-oss:120b' }}",
           "model: gpt-6-luna")],
-        ("engine.model must be 'glm-5.3-flash'",
+        ('engine.model must be "${{ \'gpt-oss:120b\' }}"',
          "source must not retain another provider endpoint or model"),
     ),
     (

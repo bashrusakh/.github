@@ -24,7 +24,7 @@ permissions:
   pull-requests: read
 engine:
   id: copilot
-  model: glm-5.3-flash
+  model: ${{ 'gpt-oss:120b' }}
   bare: true
   args: ["--deny-tool", "shell"]
   concurrency:
