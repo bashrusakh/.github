@@ -37,22 +37,22 @@ CASES = [
     (
         "compiled_setup_manifest_pin_mismatch",
         [(".github/workflows/triage-issue.lock.yml",
-          '"repo":"github/gh-aw-actions/setup","sha":"16b430146d5d5646eccef5a1ceb72152333b18b9"',
+          '"repo":"github/gh-aw-actions/setup","sha":"78463f0415a31d43de923053fe94453066fc67d9"',
           '"repo":"github/gh-aw-actions/setup","sha":"a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93"')],
-        ("lock must pin the official gh-aw setup action for v0.91.5",),
+        ("lock must pin the official gh-aw setup action for v0.91.10",),
     ),
     (
         "compiled_runtime_setup_pin_mismatch",
         [(".github/workflows/triage-pr.lock.yml",
-          "uses: github/gh-aw-actions/setup@16b430146d5d5646eccef5a1ceb72152333b18b9 # v0.91.5",
+          "uses: github/gh-aw-actions/setup@78463f0415a31d43de923053fe94453066fc67d9 # v0.91.10",
           "uses: github/gh-aw-actions/setup@a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93 # v0.91.4", 6)],
-        ("lock runtime setup actions must use the official v0.91.5 SHA",),
+        ("lock runtime setup actions must use the official v0.91.10 SHA",),
     ),
     (
         "actions_lock_setup_pin_mismatch",
-        [(".github/aw/actions-lock.json", "16b430146d5d5646eccef5a1ceb72152333b18b9",
+        [(".github/aw/actions-lock.json", "78463f0415a31d43de923053fe94453066fc67d9",
           "a63fe074b43ff5f66bcf1af0dc77f7bfc85b9d93")],
-        ("actions-lock must pin only the official gh-aw setup action for v0.91.5",),
+        ("actions-lock must pin only the official gh-aw setup action for v0.91.10",),
     ),
     (
         "ci_installed_version_guard_missing",
@@ -261,22 +261,22 @@ CASES = [
         [
             (
                 ".github/workflows/validate-masters.yml",
-                "  GH_AW_VERSION: v0.91.5\n",
+                "  GH_AW_VERSION: v0.91.10\n",
                 "  GH_AW_VERSION: v0.91.4\n",
             )
         ],
-        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.5",),
+        ("validate-masters workflow must pin GH_AW_VERSION to v0.91.10",),
     ),
     (
         "compiled_gateway_pin_mismatch",
         [
             (
                 ".github/workflows/triage-issue.lock.yml",
-                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.29"',
+                '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.30"',
                 '"image":"ghcr.io/github/gh-aw-mcpg:v0.4.28"',
             )
         ],
-        ("lock must pin gateway ghcr.io/github/gh-aw-mcpg:v0.4.29",),
+        ("lock must pin gateway ghcr.io/github/gh-aw-mcpg:v0.4.30",),
     ),
     (
         "report_incomplete_issue_writer_enabled",
