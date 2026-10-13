@@ -479,6 +479,53 @@ CASES = [
         ],
         ("safe-outputs add-comment max must be 1",),
     ),
+    (
+        "compliance_item_env_channel_removed",
+        # The agent is shell-denied and dispatch-path runs carry no item event context;
+        # dropping the parse-time item env channel must fail closed.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "    COMPLIANCE_ITEM_NUMBER: ${{ inputs.item_number }}\n"
+                "    COMPLIANCE_ITEM_KIND: ${{ inputs.item_kind }}\n",
+                "",
+            )
+        ],
+        ("engine env COMPLIANCE_ITEM_NUMBER must be",),
+    ),
+    (
+        "compliance_item_delivery_paragraph_removed",
+        # Removing the pre-fetched item/policy pointers must fail: the shell-denied agent
+        # cannot discover .policy/ contents, so the body must name the actual paths.
+        [
+            (
+                ".github/workflows/compliance.md",
+                "This run evaluates exactly one item: **${{ inputs.item_kind }} #${{ inputs.item_number }}**; the\n"
+                "same caller-supplied values are also exported as the `COMPLIANCE_ITEM_NUMBER` and\n"
+                "`COMPLIANCE_ITEM_KIND` environment variables of this run. The trusted pre-agent step has already\n"
+                "pre-fetched this item with its comment list, the trusted `policy_sha`, and the `contract_files`\n"
+                "list into read-only `.policy/item.json`, plus the authoritative policy and template files\n"
+                "themselves under `.policy/<POLICY_SHA>/` (by default `.policy/<POLICY_SHA>/AGENTS.md`,\n"
+                "`.policy/<POLICY_SHA>/CONTRIBUTING.md`, and `.policy/<POLICY_SHA>/missing-contract-files.txt`):\n"
+                "read `.policy/item.json` first and resolve `<POLICY_SHA>` from the `policy_sha` it records.\n\n",
+                "",
+            )
+        ],
+        ("must instruct reading .policy/item.json",),
+    ),
+    (
+        "compliance_prompt_item_placeholder_stripped",
+        # The compiled prompt must carry the substituted item identity; stripping the
+        # placeholder from the generated prompt content must fail closed.
+        [
+            (
+                ".github/workflows/compliance.lock.yml",
+                "__GH_AW_INPUTS_ITEM_NUMBER__",
+                "",
+            )
+        ],
+        ("must substitute the caller item identity",),
+    ),
 ]
 
 

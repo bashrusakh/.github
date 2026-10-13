@@ -16,6 +16,10 @@ the central triage deployment:
   add/remove pair with the expected allow/block lists and no comment tool, while the
   compliance master (``compliance``) exposes exactly one ``add_comment`` (+ ``hide_comment``)
   pair — no labels, assignment, close, rename, or issue creation;
+* the compliance master's item identity and pre-fetched data reach the agent without a
+  checkout or shell: the prompt substitutes the parse-time ``item_number``/``item_kind``
+  inputs, exports them as ``COMPLIANCE_ITEM_*`` env, and the body points to the pre-agent
+  step's read-only ``.policy/item.json`` and ``.policy/<POLICY_SHA>/`` contract files;
 * the masters carry no policy contract of their own: the ``contract_files`` default must name
   caller-owned files, never a file this repository ships.
 
@@ -757,6 +761,20 @@ def validate_master(root: Path, master: str, report: Report) -> None:
             dig(fm, f"engine.env.{key}") == (True, expected),
             f"{label} engine {key} must be {expected!r}",
         )
+    if mode == "comment":
+        # The item identity must reach the trusted runtime jobs from the parse-time caller
+        # inputs; the agent itself is shell-denied and a dispatch-path run carries no issue
+        # or pull_request event context, so an undeclared input would never reach it.
+        report.check(
+            dig(fm, "engine.env.COMPLIANCE_ITEM_NUMBER")
+            == (True, "${{ inputs.item_number }}"),
+            f"{label} engine env COMPLIANCE_ITEM_NUMBER must be ${{{{ inputs.item_number }}}}",
+        )
+        report.check(
+            dig(fm, "engine.env.COMPLIANCE_ITEM_KIND")
+            == (True, "${{ inputs.item_kind }}"),
+            f"{label} engine env COMPLIANCE_ITEM_KIND must be ${{{{ inputs.item_kind }}}}",
+        )
     # gh-aw derives workflow_call secrets from referenced secrets; source need not
     # duplicate the declaration. Check the generated interface and both BYOK jobs.
     lock_call = parse_frontmatter(
@@ -1389,6 +1407,35 @@ def validate_master(root: Path, master: str, report: Report) -> None:
         report.check(
             "<!-- gh-aw-compliance -->" in lock_text,
             f"{label} lock prompt must keep the gh-aw-compliance comment marker",
+        )
+        # The item identity and the pre-fetched data locations must be delivered in the
+        # compiled prompt: the agent cannot run shell to resolve $POLICY_SHA or discover
+        # .policy/ contents, and the github-context block is empty on dispatch-path runs.
+        report.check(
+            "__GH_AW_INPUTS_ITEM_NUMBER__" in lock_text
+            and "__GH_AW_INPUTS_ITEM_KIND__" in lock_text,
+            f"{label} lock prompt must substitute the caller item identity "
+            "(__GH_AW_INPUTS_ITEM_NUMBER__/__GH_AW_INPUTS_ITEM_KIND__) from the "
+            "parse-time inputs into the prompt text",
+        )
+        report.check(
+            "read `.policy/item.json` first" in source_text,
+            f"{label} source body must instruct reading .policy/item.json first; the "
+            "shell-denied agent has no other reliable way to learn which item it is "
+            "evaluating",
+        )
+        report.check(
+            ".policy/<POLICY_SHA>/AGENTS.md" in source_text
+            and ".policy/<POLICY_SHA>/CONTRIBUTING.md" in source_text,
+            f"{label} source body must list the resolved contract template paths "
+            "under .policy/<POLICY_SHA>/ (default AGENTS.md and CONTRIBUTING.md)",
+        )
+        agent_env_block = lock_job_block(lock_text, "agent") or ""
+        report.check(
+            "COMPLIANCE_ITEM_NUMBER: ${{ inputs.item_number }}" in agent_env_block
+            and "COMPLIANCE_ITEM_KIND: ${{ inputs.item_kind }}" in agent_env_block,
+            f"{label} lock agent job must export COMPLIANCE_ITEM_NUMBER/COMPLIANCE_ITEM_KIND "
+            "from the caller inputs",
         )
 
     # ---- generated lock: imports must be inlined, not deferred --------------------------
