@@ -123,8 +123,10 @@ pre-agent-steps:
           printf '%s\n' "$f" >> "$dir/missing-contract-files.txt"
         fi
       done
-      comments=$(gh api --paginate --slurp "repos/$GITHUB_REPO/issues/$ITEM_NUMBER/comments?per_page=100" \
-        --jq 'add | map({id,body,author:.user.login,updated_at})')
+      # gh --slurp cannot be combined with --jq (client-side usage error); emit each page
+      # as its own JSON document and let jq collect the pages into one comment list.
+      comments=$(gh api --paginate "repos/$GITHUB_REPO/issues/$ITEM_NUMBER/comments?per_page=100" \
+        | jq -s 'flatten | map({id,body,author:.user.login,updated_at})')
       jq -n --argjson item "$item" --argjson comments "$comments" \
         --arg policy_sha "$policy_sha" --arg policy_ref "$policy_ref" \
         --arg contract_files "$CONTRACT_FILES" \
